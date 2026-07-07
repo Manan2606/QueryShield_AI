@@ -44,6 +44,8 @@ class DatasetResponse(DatasetBase):
     storage_path: str | None
     bigquery_table_id: str | None
     status: str
+    load_error: str | None
+    loaded_at: datetime | None
     row_count: int | None
     column_count: int | None
     created_at: datetime

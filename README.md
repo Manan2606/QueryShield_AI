@@ -1,4 +1,4 @@
-﻿# QueryShield AI
+# QueryShield AI
 
 QueryShield AI is a governed Text-to-SQL analytics platform for BigQuery.
 
@@ -8,23 +8,27 @@ The goal is to let users upload CSV datasets, ask natural-language questions, ge
 
 Phase 1 will eventually include user authentication, CSV upload, BigQuery loading, dataset schema storage, natural-language questions, Gemini SQL generation, SQL safety validation, cost estimation, approved query execution, result display, and query history.
 
-## Current Step 2 Scope
+## Current Step 6 Scope
 
-This repository currently contains the project foundation, FastAPI backend skeleton, and database foundation:
+This repository currently contains the backend foundation through CSV-to-BigQuery loading:
 
 - Monorepo structure
 - FastAPI app setup
 - Environment configuration setup
 - SQLAlchemy database connection scaffolding
-- SQLAlchemy models for users and audit logs
+- SQLAlchemy models for users, audit logs, datasets, and dataset columns
 - Alembic migration setup
 - Health endpoint
 - Database health endpoint
+- Signup, login, JWT authentication, and protected user profile endpoint
+- Dataset CRUD endpoints with ownership enforcement
+- CSV upload, local storage, schema detection, and preview endpoints
+- BigQuery service foundation and protected CSV load/table-info endpoints
 - Backend dependency list
 - Environment example file
 - Frontend placeholder folder
 
-Authentication, BigQuery, Gemini, CSV upload, SQL validation, and frontend implementation are intentionally not included yet.
+Gemini, SQL generation, SQL validation, cost estimation, user-generated query execution, and frontend implementation are intentionally not included yet.
 
 ## Tech Stack
 

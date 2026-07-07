@@ -1,4 +1,4 @@
-﻿# QueryShield AI Backend
+# QueryShield AI Backend
 
 FastAPI backend skeleton for QueryShield AI.
 
@@ -142,5 +142,62 @@ curl -X POST http://127.0.0.1:8000/datasets/1/upload-csv \
 
 ```bash
 curl -X GET http://127.0.0.1:8000/datasets/1/preview \
+  -H "Authorization: Bearer <access_token>"
+```
+
+## BigQuery Loading (Step 6)
+
+Step 6 loads an already-uploaded CSV dataset from local storage into a BigQuery table. It does not add Gemini, SQL generation, SQL validation, cost estimation, arbitrary query execution, a frontend, or background workers.
+
+### Google Cloud / BigQuery Setup
+
+You need:
+
+1. A Google Cloud project.
+2. The BigQuery API enabled.
+3. A BigQuery dataset ID configured in `.env`.
+4. Application Default Credentials or a service account JSON.
+5. IAM permissions that allow creating datasets/tables and running load jobs.
+
+Minimum recommended IAM roles for local development:
+
+- BigQuery Data Editor
+- BigQuery Job User
+
+Set these environment variables in `backend/.env`:
+
+```bash
+GCP_PROJECT_ID=your-gcp-project-id
+BIGQUERY_DATASET_ID=queryshield_demo
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
+```
+
+Keep service account credentials outside this repository. Do not commit service account JSON files.
+
+### Load CSV into BigQuery
+
+`POST /datasets/{dataset_id}/load-bigquery`
+
+Requires:
+
+`Authorization: Bearer <access_token>`
+
+```bash
+curl -X POST "http://127.0.0.1:8000/datasets/1/load-bigquery" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+On success, the dataset status becomes `loaded` and `bigquery_table_id` is stored on the dataset record.
+
+### Get BigQuery Table Info
+
+`GET /datasets/{dataset_id}/bigquery-info`
+
+Requires:
+
+`Authorization: Bearer <access_token>`
+
+```bash
+curl -X GET "http://127.0.0.1:8000/datasets/1/bigquery-info" \
   -H "Authorization: Bearer <access_token>"
 ```

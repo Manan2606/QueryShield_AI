@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     GCP_PROJECT_ID: str = ""
     BIGQUERY_DATASET_ID: str = "queryshield_demo"
+    GOOGLE_APPLICATION_CREDENTIALS: str | None = None
     GEMINI_API_KEY: str = ""
     MAX_BYTES_BILLED: int = 100000000
     UPLOAD_DIR: str = "./storage/uploads"
