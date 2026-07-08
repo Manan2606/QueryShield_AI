@@ -1,8 +1,8 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.db.database import Base, engine
-from app.models.audit_log import AuditLog
-from app.models.user import User
+from app.core.config import settings
+
 from app.routers.auth import router as auth_router
 from app.routers.datasets import router as datasets_router
 from app.routers.health import router as health_router
@@ -14,15 +14,19 @@ app = FastAPI(
     version="0.1.0",
 )
 
+if settings.frontend_origins_list:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.frontend_origins_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(datasets_router)
-
-
-@app.on_event("startup")
-def create_tables() -> None:
-    Base.metadata.create_all(bind=engine)
 
 
 @app.get("/")

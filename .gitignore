@@ -71,3 +71,9 @@ build/
 # Local runtime files
 *.pid
 *.seed
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Accidental local env scratch files
+backend/env.txt

@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "change_me"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    FRONTEND_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
     GCP_PROJECT_ID: str = ""
     BIGQUERY_DATASET_ID: str = "queryshield_demo"
     GOOGLE_APPLICATION_CREDENTIALS: str | None = None
@@ -20,6 +21,14 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @property
+    def frontend_origins_list(self) -> list[str]:
+        return [
+            origin.strip()
+            for origin in self.FRONTEND_ORIGINS.split(",")
+            if origin.strip()
+        ]
 
 
 settings = Settings()
