@@ -8,6 +8,7 @@ import CurrentUserSection from "@/components/CurrentUserSection";
 import DatasetActions from "@/components/DatasetActions";
 import DatasetCreateForm from "@/components/DatasetCreateForm";
 import DatasetList from "@/components/DatasetList";
+import NaturalLanguageSqlSection from "@/components/NaturalLanguageSqlSection";
 import * as api from "@/lib/api";
 import { clearStoredToken, getStoredToken, storeToken } from "@/lib/auth";
 import type {
@@ -18,6 +19,7 @@ import type {
   CSVPreviewResponse,
   Dataset,
   DatasetColumn,
+  QueryGenerateResponse,
   User,
 } from "@/lib/types";
 
@@ -49,6 +51,7 @@ export default function Home() {
   const [selectedColumns, setSelectedColumns] = useState<DatasetColumn[]>([]);
   const [csvPreview, setCsvPreview] = useState<CSVPreviewResponse | null>(null);
   const [bigQueryInfo, setBigQueryInfo] = useState<BigQueryTableInfo | null>(null);
+  const [generatedQuery, setGeneratedQuery] = useState<QueryGenerateResponse | null>(null);
   const [apiPanel, setApiPanel] = useState<ApiPanelState | null>(null);
   const [backendStatuses, setBackendStatuses] = useState<Partial<Record<BackendStatusKey, BackendStatusResult>>>({});
   const [loading, setLoading] = useState<string | null>(null);
@@ -90,6 +93,7 @@ export default function Home() {
     setSelectedColumns([]);
     setCsvPreview(null);
     setBigQueryInfo(null);
+    setGeneratedQuery(null);
   }
 
   useEffect(() => {
@@ -208,6 +212,7 @@ export default function Home() {
       setSelectedColumns([]);
       setCsvPreview(null);
       setBigQueryInfo(null);
+      setGeneratedQuery(null);
       recordSuccess("POST /datasets", data, 201);
     } catch (error) {
       recordError("POST /datasets", error);
@@ -239,6 +244,7 @@ export default function Home() {
     setSelectedDataset(dataset);
     setCsvPreview(null);
     setBigQueryInfo(null);
+    setGeneratedQuery(null);
     setLoading("datasetDetail");
     try {
       await refreshSelectedDataset(token, dataset.id);
@@ -262,6 +268,7 @@ export default function Home() {
         setSelectedColumns([]);
         setCsvPreview(null);
         setBigQueryInfo(null);
+        setGeneratedQuery(null);
       }
       await refreshDatasets(token, "GET /datasets after delete");
       recordSuccess(`DELETE /datasets/${dataset.id}`, data);
@@ -322,6 +329,7 @@ export default function Home() {
       await refreshDatasets(token, "GET /datasets after upload");
       setCsvPreview(null);
       setBigQueryInfo(null);
+      setGeneratedQuery(null);
       recordSuccess(`POST /datasets/${selectedDataset.id}/upload-csv`, data);
     } catch (error) {
       recordError(`POST /datasets/${selectedDataset.id}/upload-csv`, error);
@@ -357,6 +365,7 @@ export default function Home() {
       const data = await api.loadBigQuery(token, selectedDataset.id);
       await refreshSelectedDataset(token, selectedDataset.id, `GET /datasets/${selectedDataset.id} after BigQuery load`);
       await refreshDatasets(token, "GET /datasets after BigQuery load");
+      setGeneratedQuery(null);
       recordSuccess(`POST /datasets/${selectedDataset.id}/load-bigquery`, data);
     } catch (error) {
       recordError(`POST /datasets/${selectedDataset.id}/load-bigquery`, error);
@@ -382,6 +391,23 @@ export default function Home() {
     }
   }
 
+  async function handleGenerateSql(question: string) {
+    if (!token || !selectedDataset) {
+      return;
+    }
+
+    setLoading("generateSql");
+    try {
+      const data = await api.generateSql(token, { dataset_id: selectedDataset.id, question });
+      setGeneratedQuery(data);
+      recordSuccess("POST /queries/generate", data);
+    } catch (error) {
+      recordError("POST /queries/generate", error);
+    } finally {
+      setLoading(null);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-6 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -389,7 +415,7 @@ export default function Home() {
           <p className="text-sm font-semibold uppercase text-slate-500">Internal backend testing interface</p>
           <h1 className="mt-2 text-3xl font-bold tracking-normal text-slate-950">QueryShield AI Test Console</h1>
           <p className="mt-2 max-w-3xl text-sm text-slate-600">
-            Use this temporary console to exercise the completed backend flows from a browser: health checks, auth, dataset CRUD, CSV upload and preview, and BigQuery loading.
+            Use this temporary console to exercise the completed backend flows from a browser: health checks, auth, dataset CRUD, CSV upload and preview, BigQuery loading, and SQL generation.
           </p>
         </header>
 
@@ -411,6 +437,13 @@ export default function Home() {
           onPreviewCsv={handlePreviewCsv}
           onLoadBigQuery={handleLoadBigQuery}
           onGetBigQueryInfo={handleGetBigQueryInfo}
+        />
+        <NaturalLanguageSqlSection
+          token={token}
+          dataset={selectedDataset}
+          generatedQuery={generatedQuery}
+          loading={loading === "generateSql"}
+          onGenerate={handleGenerateSql}
         />
         <ApiResponsePanel response={apiPanel} />
       </div>

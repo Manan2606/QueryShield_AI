@@ -6,6 +6,8 @@ import type {
   CSVUploadResponse,
   Dataset,
   DatasetDetail,
+  QueryGenerateResponse,
+  QueryRequestSummary,
   User,
 } from "./types";
 
@@ -167,4 +169,13 @@ export function loadBigQuery(token: string, datasetId: number) {
 
 export function getBigQueryInfo(token: string, datasetId: number) {
   return apiRequest<BigQueryTableInfo>(`/datasets/${datasetId}/bigquery-info`, { token });
+}
+
+export function generateSql(token: string, payload: { dataset_id: number; question: string }) {
+  return apiRequest<QueryGenerateResponse>("/queries/generate", { method: "POST", token, body: payload });
+}
+
+export function listQueryRequests(token: string, datasetId?: number) {
+  const query = datasetId ? `?dataset_id=${datasetId}` : "";
+  return apiRequest<QueryRequestSummary[]>(`/queries${query}`, { token });
 }

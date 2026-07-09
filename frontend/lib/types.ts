@@ -80,6 +80,27 @@ export type BigQueryTableInfo = {
   schema: BigQueryTableField[];
 };
 
+
+export type QueryGenerateResponse = {
+  id: number;
+  dataset_id: number;
+  question: string;
+  generated_sql: string;
+  model_name: string | null;
+  status: string;
+  created_at: string;
+};
+
+export type QueryRequestSummary = {
+  id: number;
+  dataset_id: number;
+  question: string;
+  generated_sql: string | null;
+  model_name: string | null;
+  status: string;
+  error_message: string | null;
+  created_at: string;
+};
 export type ApiPanelState = {
   operation: string;
   ok: boolean;

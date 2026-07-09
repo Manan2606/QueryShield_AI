@@ -46,3 +46,4 @@ class Dataset(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    query_requests = relationship("QueryRequest", back_populates="dataset", cascade="all, delete-orphan")

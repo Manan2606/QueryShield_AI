@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     BIGQUERY_DATASET_ID: str = "queryshield_demo"
     GOOGLE_APPLICATION_CREDENTIALS: str | None = None
     GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash"
     MAX_BYTES_BILLED: int = 100000000
     UPLOAD_DIR: str = "./storage/uploads"
     MAX_UPLOAD_SIZE_MB: int = 20

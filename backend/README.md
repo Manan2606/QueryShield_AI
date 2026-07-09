@@ -224,3 +224,62 @@ Requires:
 curl -X GET "http://127.0.0.1:8000/datasets/1/bigquery-info" \
   -H "Authorization: Bearer <access_token>"
 ```
+
+## Step 7: Gemini SQL Generation
+
+Step 7 adds natural-language-to-SQL generation for datasets that have already been loaded into BigQuery. The backend sends the selected dataset table ID, stored column names and types, and the user's question to Gemini, then stores and returns the generated BigQuery Standard SQL.
+
+This step only generates SQL. It does not execute SQL, run a BigQuery dry run, estimate cost, approve SQL, return result rows, or create charts.
+
+### Gemini Setup
+
+Add Gemini configuration to `backend/.env`:
+
+```env
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-2.5-flash
+```
+
+Gemini credentials stay in the backend. Never expose `GEMINI_API_KEY` through frontend environment variables. The dataset must already be loaded into BigQuery before SQL generation.
+
+### Generate SQL
+
+`POST /queries/generate`
+
+Requires:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+Request:
+
+```json
+{
+  "dataset_id": 1,
+  "question": "What is the total sales amount by region?"
+}
+```
+
+Example curl:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/queries/generate" \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"dataset_id":1,"question":"What is the total sales amount by region?"}'
+```
+
+The response contains generated SQL only. The SQL is stored in `query_requests` with status `generated` or `failed`.
+
+### Query History
+
+`GET /queries`
+
+Lists only the authenticated user's query-generation records. Supports `skip`, `limit`, and optional `dataset_id`.
+
+### Query Record
+
+`GET /queries/{query_request_id}`
+
+Returns one query-generation record owned by the authenticated user. Records owned by another user return `404`.

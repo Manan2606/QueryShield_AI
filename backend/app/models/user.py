@@ -28,3 +28,4 @@ class User(Base):
     )
 
     datasets = relationship("Dataset", back_populates="owner", cascade="all, delete-orphan")
+    query_requests = relationship("QueryRequest", back_populates="user", cascade="all, delete-orphan")
