@@ -6,6 +6,7 @@ import type {
   CSVUploadResponse,
   Dataset,
   DatasetDetail,
+  QueryDryRunResponse,
   QueryGenerateResponse,
   QueryRequestSummary,
   SQLValidationResponse,
@@ -188,4 +189,12 @@ export function validateSql(token: string, queryRequestId: number) {
 
 export function getSqlValidation(token: string, queryRequestId: number) {
   return apiRequest<SQLValidationResponse>(`/queries/${queryRequestId}/validation`, { token });
+}
+
+export function runCostDryRun(token: string, queryRequestId: number) {
+  return apiRequest<QueryDryRunResponse>(`/queries/${queryRequestId}/dry-run`, { method: "POST", token });
+}
+
+export function getCostDryRun(token: string, queryRequestId: number) {
+  return apiRequest<QueryDryRunResponse>(`/queries/${queryRequestId}/dry-run`, { token });
 }

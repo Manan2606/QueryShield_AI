@@ -94,6 +94,12 @@ export type QueryGenerateResponse = {
   validation_errors: string[] | null;
   validation_warnings: string[] | null;
   validated_at: string | null;
+  dry_run_status: string;
+  estimated_bytes_processed: number | null;
+  estimated_cost: string | null;
+  bytes_limit_exceeded: boolean | null;
+  execution_eligible: boolean;
+  dry_run_at: string | null;
 };
 
 export type QueryRequestSummary = {
@@ -110,6 +116,12 @@ export type QueryRequestSummary = {
   validation_errors: string[] | null;
   validation_warnings: string[] | null;
   validated_at: string | null;
+  dry_run_status: string;
+  estimated_bytes_processed: number | null;
+  estimated_cost: string | null;
+  bytes_limit_exceeded: boolean | null;
+  execution_eligible: boolean;
+  dry_run_at: string | null;
 };
 
 export type SQLValidationResponse = {
@@ -124,6 +136,29 @@ export type SQLValidationResponse = {
   validated_at: string | null;
   generated_sql: string;
   normalized_sql: string | null;
+};
+
+export type QueryDryRunResponse = {
+  query_request_id: number;
+  dataset_id: number;
+  dry_run_status: string;
+  dry_run_valid: boolean;
+  estimated_bytes_processed: number | null;
+  estimated_mib_processed: number | null;
+  estimated_gib_processed: number | null;
+  estimated_tib_processed: number | null;
+  maximum_bytes_billed: number;
+  maximum_mib_billed: number;
+  bytes_limit_exceeded: boolean;
+  estimated_cost: string | null;
+  estimated_cost_currency: string;
+  execution_eligible: boolean;
+  dry_run_error: string | null;
+  dry_run_at: string | null;
+  dry_run_job_id: string | null;
+  dry_run_location: string | null;
+  generated_sql: string;
+  warnings: string[];
 };
 export type ApiPanelState = {
   operation: string;

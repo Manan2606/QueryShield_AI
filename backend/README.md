@@ -329,3 +329,63 @@ curl -X GET "http://127.0.0.1:8000/queries/12/validation" \
 ```
 
 If a query has not been validated yet, the endpoint returns `400` with a clear message. Records not owned by the authenticated user return `404`.
+
+## Step 9: BigQuery Dry Run and Cost Guardrails
+
+Step 9 runs generated SQL through a BigQuery dry run after Step 8 validation has passed. The dry run asks BigQuery to validate the query and estimate bytes processed without executing the query and without returning result rows.
+
+A query must have:
+
+- `generation_status = generated`
+- `validation_status = passed`
+- `is_safe = true`
+
+The application compares BigQuery's estimated bytes against `MAX_BYTES_BILLED`. Queries within the limit receive `dry_run_status = passed` and `execution_eligible = true`. Queries accepted by BigQuery but above the limit receive `dry_run_status = blocked` and `execution_eligible = false`.
+
+Estimated cost is informational and may differ from actual billing because of pricing model, free usage, minimum billing rules, caching, discounts, reservations, and Google Cloud billing configuration. Capacity-based BigQuery customers may not be billed per byte in the same way. The bytes threshold is the primary technical guardrail.
+
+Configure these values in `backend/.env`:
+
+```env
+MAX_BYTES_BILLED=100000000
+BIGQUERY_ON_DEMAND_PRICE_PER_TIB=6.25
+BIGQUERY_CURRENCY=USD
+```
+
+### Run BigQuery Dry Run
+
+`POST /queries/{query_request_id}/dry-run`
+
+Requires:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+Example:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/queries/12/dry-run" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+The response includes BigQuery validity, estimated bytes, MiB/GiB/TiB conversions, configured maximum bytes, informational estimated cost, blocked/pass status, execution eligibility, timestamp, and BigQuery job metadata when available.
+
+### Get Stored Dry-Run Result
+
+`GET /queries/{query_request_id}/dry-run`
+
+Requires:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+Example:
+
+```bash
+curl -X GET "http://127.0.0.1:8000/queries/12/dry-run" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+If no dry run has occurred, the endpoint returns `400` with a clear message. A successful dry run does not execute the query. Real execution will be implemented separately in Step 10 and must independently re-check all safety and cost gates.

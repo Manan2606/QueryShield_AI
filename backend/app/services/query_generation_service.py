@@ -39,6 +39,18 @@ def _safe_error_message(exc: Exception) -> str:
     return message or "SQL generation failed"
 
 
+def _dry_run_summary(query_request: QueryRequest) -> dict:
+    estimated_cost = query_request.estimated_cost
+    return {
+        "dry_run_status": query_request.dry_run_status,
+        "estimated_bytes_processed": query_request.estimated_bytes_processed,
+        "estimated_cost": f"{estimated_cost:.6f}" if estimated_cost is not None else None,
+        "bytes_limit_exceeded": query_request.bytes_limit_exceeded,
+        "execution_eligible": query_request.execution_eligible,
+        "dry_run_at": query_request.dry_run_at,
+    }
+
+
 def _validation_summary(query_request: QueryRequest) -> dict:
     return {
         "validation_status": query_request.validation_status,
@@ -59,6 +71,7 @@ def _to_generate_response(query_request: QueryRequest) -> dict:
         "status": query_request.generation_status,
         "created_at": query_request.created_at,
         **_validation_summary(query_request),
+        **_dry_run_summary(query_request),
     }
 
 
@@ -73,6 +86,7 @@ def _to_summary(query_request: QueryRequest) -> dict:
         "error_message": query_request.error_message,
         "created_at": query_request.created_at,
         **_validation_summary(query_request),
+        **_dry_run_summary(query_request),
     }
 
 

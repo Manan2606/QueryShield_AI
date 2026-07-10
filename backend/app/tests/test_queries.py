@@ -660,3 +660,299 @@ def test_validation_does_not_execute_sql_or_run_bigquery_dry_run(monkeypatch, cl
     assert "total_bytes" not in response_text
     assert "num_rows" not in response_text
     assert "dry" not in response_text
+
+
+class _FakeDryRunResult:
+    def __init__(self, total_bytes_processed, job_id="dry_job_1", location="US"):
+        self.total_bytes_processed = total_bytes_processed
+        self.job_id = job_id
+        self.location = location
+
+
+def _create_validated_query_request(
+    user_id,
+    dataset_id,
+    *,
+    sql="SELECT region FROM `test-project.queryshield_demo.dataset_1_sales` LIMIT 10",
+    generation_status="generated",
+    validation_status="passed",
+    is_safe=True,
+):
+    query_request_id = _create_query_request_record(user_id, dataset_id, sql=sql, generation_status=generation_status)
+    db = database.SessionLocal()
+    try:
+        query_request = db.query(QueryRequest).filter(QueryRequest.id == query_request_id).first()
+        query_request.validation_status = validation_status
+        query_request.is_safe = is_safe
+        db.commit()
+        return query_request_id
+    finally:
+        db.close()
+
+
+def _dry_run_ready_query(client, email="dryrun@example.com", *, dataset_status="loaded", table_id="test-project.queryshield_demo.dataset_1_sales"):
+    headers, user_id = _auth_headers(client, email)
+    dataset_id = _create_dataset_record(user_id, status=dataset_status, table_id=table_id)
+    query_request_id = _create_validated_query_request(user_id, dataset_id)
+    return headers, user_id, dataset_id, query_request_id
+
+
+def test_unauthenticated_user_cannot_run_dry_run(client):
+    headers, _user_id, _dataset_id, query_request_id = _dry_run_ready_query(client, "dryrun-auth@example.com")
+
+    response = client.post(f"/queries/{query_request_id}/dry-run")
+
+    assert response.status_code == 401
+
+
+def test_user_cannot_dry_run_another_users_query(client):
+    _owner_headers, owner_id = _auth_headers(client, "dryrun-owner@example.com")
+    other_headers, _other_id = _auth_headers(client, "dryrun-other@example.com")
+    dataset_id = _create_dataset_record(owner_id)
+    query_request_id = _create_validated_query_request(owner_id, dataset_id)
+
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=other_headers)
+
+    assert response.status_code == 404
+
+
+def test_query_request_must_exist_for_dry_run(client):
+    headers, _user_id = _auth_headers(client, "dryrun-missing@example.com")
+
+    response = client.post("/queries/999999/dry-run", headers=headers)
+
+    assert response.status_code == 404
+
+
+def test_generated_sql_must_exist_for_dry_run(client):
+    headers, user_id = _auth_headers(client, "dryrun-nosql@example.com")
+    dataset_id = _create_dataset_record(user_id)
+    query_request_id = _create_validated_query_request(user_id, dataset_id, sql=None)
+
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 400
+    assert "generated SQL" in response.json()["detail"]
+
+
+def test_generation_status_must_be_generated_for_dry_run(client):
+    headers, user_id = _auth_headers(client, "dryrun-generation-status@example.com")
+    dataset_id = _create_dataset_record(user_id)
+    query_request_id = _create_validated_query_request(user_id, dataset_id, generation_status="failed")
+
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 400
+    assert "generation" in response.json()["detail"]
+
+
+def test_validation_must_have_passed_for_dry_run(client):
+    headers, user_id = _auth_headers(client, "dryrun-validation-status@example.com")
+    dataset_id = _create_dataset_record(user_id)
+    query_request_id = _create_validated_query_request(user_id, dataset_id, validation_status="failed", is_safe=False)
+
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 409
+    assert "SQL safety validation" in response.json()["detail"]
+
+
+def test_is_safe_must_be_true_for_dry_run(client):
+    headers, user_id = _auth_headers(client, "dryrun-unsafe@example.com")
+    dataset_id = _create_dataset_record(user_id)
+    query_request_id = _create_validated_query_request(user_id, dataset_id, validation_status="passed", is_safe=False)
+
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 409
+
+
+def test_dry_run_dataset_must_exist_and_be_owned(client):
+    headers, user_id = _auth_headers(client, "dryrun-dataset-owner@example.com")
+    _other_headers, other_id = _auth_headers(client, "dryrun-dataset-other@example.com")
+    other_dataset_id = _create_dataset_record(other_id)
+    query_request_id = _create_validated_query_request(user_id, other_dataset_id)
+
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Dataset not found"
+
+
+def test_dataset_must_be_loaded_for_dry_run(client):
+    headers, _user_id, _dataset_id, query_request_id = _dry_run_ready_query(client, "dryrun-unloaded@example.com", dataset_status="schema_detected")
+
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 400
+    assert "loaded into BigQuery" in response.json()["detail"]
+
+
+def test_dataset_must_have_bigquery_table_id_for_dry_run(client):
+    headers, _user_id, _dataset_id, query_request_id = _dry_run_ready_query(client, "dryrun-notable@example.com", table_id=None)
+
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Dataset does not have a BigQuery table ID"
+
+
+def test_successful_within_limit_dry_run_stores_estimate_and_execution_eligible(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _dry_run_ready_query(client, "dryrun-pass@example.com")
+    monkeypatch.setattr("app.services.query_dry_run_service.run_query_dry_run", lambda sql: _FakeDryRunResult(52_428_800))
+
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dry_run_status"] == "passed"
+    assert payload["dry_run_valid"] is True
+    assert payload["estimated_bytes_processed"] == 52_428_800
+    assert payload["estimated_mib_processed"] == 50.0
+    assert payload["maximum_bytes_billed"] == 100_000_000
+    assert payload["bytes_limit_exceeded"] is False
+    assert payload["execution_eligible"] is True
+    assert payload["dry_run_job_id"] == "dry_job_1"
+    stored = _stored_query_request(query_request_id)
+    assert stored.dry_run_status == "passed"
+    assert stored.execution_eligible is True
+
+
+def test_over_limit_dry_run_is_blocked(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _dry_run_ready_query(client, "dryrun-blocked@example.com")
+    monkeypatch.setattr("app.services.query_dry_run_service.run_query_dry_run", lambda sql: _FakeDryRunResult(500_000_000))
+
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dry_run_status"] == "blocked"
+    assert payload["dry_run_valid"] is True
+    assert payload["bytes_limit_exceeded"] is True
+    assert payload["execution_eligible"] is False
+    stored = _stored_query_request(query_request_id)
+    assert stored.dry_run_status == "blocked"
+    assert stored.execution_eligible is False
+
+
+def test_invalid_bigquery_sql_sets_failed_status_and_sanitized_error(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _dry_run_ready_query(client, "dryrun-failed@example.com")
+    BadRequest = type("BadRequest", (Exception,), {})
+
+    def raise_bad_request(sql):
+        raise BadRequest("Unrecognized name: secret_column at [1:8] credential=/private/key.json")
+
+    monkeypatch.setattr("app.services.query_dry_run_service.run_query_dry_run", raise_bad_request)
+
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dry_run_status"] == "failed"
+    assert payload["dry_run_valid"] is False
+    assert payload["execution_eligible"] is False
+    assert payload["dry_run_error"] == "The query references a field that does not exist."
+    assert "key.json" not in payload["dry_run_error"]
+
+
+def test_credential_error_sets_error_status_and_sanitized_error(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _dry_run_ready_query(client, "dryrun-error@example.com")
+    DefaultCredentialsError = type("DefaultCredentialsError", (Exception,), {})
+
+    def raise_credentials(sql):
+        raise DefaultCredentialsError("Could not read credentials from C:/secret/service-account.json")
+
+    monkeypatch.setattr("app.services.query_dry_run_service.run_query_dry_run", raise_credentials)
+
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["dry_run_status"] == "error"
+    assert payload["dry_run_valid"] is False
+    assert payload["execution_eligible"] is False
+    assert payload["dry_run_error"] == "Google Cloud credentials are not configured correctly."
+
+
+def test_estimated_cost_and_byte_conversions_are_correct(monkeypatch):
+    from app.services.query_dry_run_service import bytes_to_gib, bytes_to_mib, bytes_to_tib, calculate_estimated_cost
+
+    assert bytes_to_mib(1024**2) == 1.0
+    assert bytes_to_gib(1024**3) == 1.0
+    assert bytes_to_tib(1024**4) == 1.0
+    assert str(calculate_estimated_cost(1024**4)) == "6.250000"
+    assert str(calculate_estimated_cost(0)) == "0.000000"
+
+
+def test_rerun_replaces_latest_stored_dry_run(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _dry_run_ready_query(client, "dryrun-rerun@example.com")
+    estimates = iter([_FakeDryRunResult(500_000_000, "job_large"), _FakeDryRunResult(1_048_576, "job_small")])
+    monkeypatch.setattr("app.services.query_dry_run_service.run_query_dry_run", lambda sql: next(estimates))
+
+    first = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+    second = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    payload = second.json()
+    assert payload["dry_run_status"] == "passed"
+    assert payload["estimated_bytes_processed"] == 1_048_576
+    assert payload["dry_run_job_id"] == "job_small"
+    assert payload["execution_eligible"] is True
+
+
+def test_stored_dry_run_endpoint_enforces_ownership(monkeypatch, client):
+    owner_headers, owner_id, dataset_id, query_request_id = _dry_run_ready_query(client, "dryrun-get-owner@example.com")
+    other_headers, _other_id = _auth_headers(client, "dryrun-get-other@example.com")
+    monkeypatch.setattr("app.services.query_dry_run_service.run_query_dry_run", lambda sql: _FakeDryRunResult(1_048_576))
+    assert client.post(f"/queries/{query_request_id}/dry-run", headers=owner_headers).status_code == 200
+
+    response = client.get(f"/queries/{query_request_id}/dry-run", headers=other_headers)
+
+    assert response.status_code == 404
+
+
+def test_get_dry_run_before_run_returns_400(client):
+    headers, _user_id, _dataset_id, query_request_id = _dry_run_ready_query(client, "dryrun-before-get@example.com")
+
+    response = client.get(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Query dry run has not been run"
+
+
+def test_dry_run_does_not_return_rows_or_create_execution_job(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _dry_run_ready_query(client, "dryrun-no-execute@example.com")
+    observed = {}
+
+    def fake_dry_run(sql):
+        observed["sql"] = sql
+        return _FakeDryRunResult(1_048_576)
+
+    monkeypatch.setattr("app.services.query_dry_run_service.run_query_dry_run", fake_dry_run)
+    response = client.post(f"/queries/{query_request_id}/dry-run", headers=headers)
+
+    assert response.status_code == 200
+    assert observed["sql"].startswith("SELECT")
+    response_text = response.text.lower()
+    assert "rows" not in response_text
+    assert "result" not in response_text
+    assert "execute" not in response_text
+
+
+def test_existing_generation_and_validation_still_work_after_dry_run_fields(monkeypatch, client):
+    headers, user_id = _auth_headers(client, "dryrun-existing-flow@example.com")
+    dataset_id = _create_dataset_record(user_id)
+    monkeypatch.setattr(
+        "app.services.query_generation_service.generate_bigquery_sql",
+        lambda table_id, columns, question: f"SELECT region FROM `{table_id}` LIMIT 10",
+    )
+
+    generate_response = client.post("/queries/generate", json={"dataset_id": dataset_id, "question": "Show regions"}, headers=headers)
+    assert generate_response.status_code == 200
+    query_request_id = generate_response.json()["id"]
+    validate_response = client.post(f"/queries/{query_request_id}/validate", headers=headers)
+
+    assert validate_response.status_code == 200
+    assert validate_response.json()["validation_status"] == "passed"
+    assert generate_response.json()["dry_run_status"] == "not_run"

@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass
 import re
 from pathlib import Path
 from typing import Any
@@ -154,3 +155,28 @@ def get_bigquery_table_info(bigquery_table_id: str) -> dict[str, Any]:
             for field in getattr(table, "schema", [])
         ],
     }
+
+
+@dataclass(frozen=True)
+class QueryDryRunResult:
+    total_bytes_processed: int | None
+    job_id: str | None
+    location: str | None
+    estimate_accuracy: str | None = None
+
+
+def run_query_dry_run(sql: str) -> QueryDryRunResult:
+    bigquery = _get_bigquery_module()
+    client = get_bigquery_client()
+    job_config = bigquery.QueryJobConfig(
+        dry_run=True,
+        use_query_cache=False,
+        use_legacy_sql=False,
+    )
+    query_job = client.query(sql, job_config=job_config)
+    return QueryDryRunResult(
+        total_bytes_processed=getattr(query_job, "total_bytes_processed", None),
+        job_id=getattr(query_job, "job_id", None),
+        location=getattr(query_job, "location", None),
+        estimate_accuracy=getattr(query_job, "estimated_bytes_processed_accuracy", None),
+    )

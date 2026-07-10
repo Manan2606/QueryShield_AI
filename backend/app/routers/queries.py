@@ -4,8 +4,14 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.database import get_db
 from app.models.user import User
+from app.schemas.query_dry_run import QueryDryRunResponse
 from app.schemas.query_generation import QueryGenerateRequest, QueryGenerateResponse, QueryRequestSummary
 from app.schemas.sql_validation import SQLValidationResponse
+from app.services.query_dry_run_service import (
+    QueryDryRunRequestError,
+    dry_run_query_request,
+    get_query_dry_run,
+)
 from app.services.query_generation_service import (
     QueryGenerationError,
     generate_sql_for_dataset,
@@ -75,6 +81,32 @@ def read_query_validation(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return SQLValidationResponse(**result)
 
+
+
+@router.post("/{query_request_id}/dry-run", response_model=QueryDryRunResponse)
+def run_query_dry_run(
+    query_request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> QueryDryRunResponse:
+    try:
+        result = dry_run_query_request(db, current_user.id, query_request_id)
+    except QueryDryRunRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return QueryDryRunResponse(**result)
+
+
+@router.get("/{query_request_id}/dry-run", response_model=QueryDryRunResponse)
+def read_query_dry_run(
+    query_request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> QueryDryRunResponse:
+    try:
+        result = get_query_dry_run(db, current_user.id, query_request_id)
+    except QueryDryRunRequestError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    return QueryDryRunResponse(**result)
 
 @router.get("/{query_request_id}", response_model=QueryRequestSummary)
 def read_query(

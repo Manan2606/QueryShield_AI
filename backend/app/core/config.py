@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +15,8 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
     MAX_BYTES_BILLED: int = 100000000
+    BIGQUERY_ON_DEMAND_PRICE_PER_TIB: Decimal = Decimal("6.25")
+    BIGQUERY_CURRENCY: str = "USD"
     UPLOAD_DIR: str = "./storage/uploads"
     MAX_UPLOAD_SIZE_MB: int = 20
     CSV_PREVIEW_ROWS: int = 10

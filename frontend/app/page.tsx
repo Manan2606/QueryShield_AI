@@ -19,6 +19,7 @@ import type {
   CSVPreviewResponse,
   Dataset,
   DatasetColumn,
+  QueryDryRunResponse,
   QueryGenerateResponse,
   SQLValidationResponse,
   User,
@@ -400,6 +401,13 @@ export default function Home() {
   function handleValidationError(operation: string, error: unknown) {
     recordError(operation, error);
   }
+  function handleDryRunResult(operation: string, data: QueryDryRunResponse) {
+    recordSuccess(operation, data);
+  }
+
+  function handleDryRunError(operation: string, error: unknown) {
+    recordError(operation, error);
+  }
   async function handleGenerateSql(question: string) {
     if (!token || !selectedDataset) {
       return;
@@ -455,6 +463,8 @@ export default function Home() {
           onGenerate={handleGenerateSql}
           onValidationResult={handleValidationResult}
           onValidationError={handleValidationError}
+          onDryRunResult={handleDryRunResult}
+          onDryRunError={handleDryRunError}
         />
         <ApiResponsePanel response={apiPanel} />
       </div>

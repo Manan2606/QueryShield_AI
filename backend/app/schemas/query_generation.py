@@ -29,6 +29,12 @@ class QueryGenerateResponse(BaseModel):
     validation_errors: list[str] | None
     validation_warnings: list[str] | None
     validated_at: datetime | None
+    dry_run_status: str
+    estimated_bytes_processed: int | None
+    estimated_cost: str | None
+    bytes_limit_exceeded: bool | None
+    execution_eligible: bool
+    dry_run_at: datetime | None
 
 
 class QueryRequestSummary(BaseModel):
@@ -45,5 +51,11 @@ class QueryRequestSummary(BaseModel):
     validation_errors: list[str] | None
     validation_warnings: list[str] | None
     validated_at: datetime | None
+    dry_run_status: str
+    estimated_bytes_processed: int | None
+    estimated_cost: str | None
+    bytes_limit_exceeded: bool | None
+    execution_eligible: bool
+    dry_run_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
