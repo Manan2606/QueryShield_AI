@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
@@ -16,6 +16,13 @@ class QueryRequest(Base):
     generated_sql: Mapped[str | None] = mapped_column(Text, nullable=True)
     model_name: Mapped[str | None] = mapped_column(String, nullable=True)
     generation_status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    validation_status: Mapped[str] = mapped_column(String, nullable=False, default="not_validated")
+    is_safe: Mapped[bool | None] = mapped_column(nullable=True)
+    statement_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    validation_errors: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    validation_warnings: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    referenced_tables: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

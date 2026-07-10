@@ -24,6 +24,11 @@ class QueryGenerateResponse(BaseModel):
     model_name: str | None
     status: str
     created_at: datetime
+    validation_status: str
+    is_safe: bool | None
+    validation_errors: list[str] | None
+    validation_warnings: list[str] | None
+    validated_at: datetime | None
 
 
 class QueryRequestSummary(BaseModel):
@@ -35,5 +40,10 @@ class QueryRequestSummary(BaseModel):
     status: str
     error_message: str | None
     created_at: datetime
+    validation_status: str
+    is_safe: bool | None
+    validation_errors: list[str] | None
+    validation_warnings: list[str] | None
+    validated_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)

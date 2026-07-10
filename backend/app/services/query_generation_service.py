@@ -39,6 +39,16 @@ def _safe_error_message(exc: Exception) -> str:
     return message or "SQL generation failed"
 
 
+def _validation_summary(query_request: QueryRequest) -> dict:
+    return {
+        "validation_status": query_request.validation_status,
+        "is_safe": query_request.is_safe,
+        "validation_errors": query_request.validation_errors,
+        "validation_warnings": query_request.validation_warnings,
+        "validated_at": query_request.validated_at,
+    }
+
+
 def _to_generate_response(query_request: QueryRequest) -> dict:
     return {
         "id": query_request.id,
@@ -48,6 +58,7 @@ def _to_generate_response(query_request: QueryRequest) -> dict:
         "model_name": query_request.model_name,
         "status": query_request.generation_status,
         "created_at": query_request.created_at,
+        **_validation_summary(query_request),
     }
 
 
@@ -61,6 +72,7 @@ def _to_summary(query_request: QueryRequest) -> dict:
         "status": query_request.generation_status,
         "error_message": query_request.error_message,
         "created_at": query_request.created_at,
+        **_validation_summary(query_request),
     }
 
 

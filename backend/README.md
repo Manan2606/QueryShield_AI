@@ -283,3 +283,49 @@ Lists only the authenticated user's query-generation records. Supports `skip`, `
 `GET /queries/{query_request_id}`
 
 Returns one query-generation record owned by the authenticated user. Records owned by another user return `404`.
+
+## Step 8: Validate Generated SQL
+
+Step 8 adds a formal validation layer for generated BigQuery SQL before any future dry run or execution. Validation uses `sqlglot` with the BigQuery dialect where supported, stores the result on the `query_requests` record, and returns detailed feedback.
+
+Validation does not execute SQL, does not run a BigQuery dry run, does not estimate query cost, and does not return query rows. It is one safety layer; later dry-run and execution controls are still required for full execution safety.
+
+The validator allows a single read-only `SELECT` or `WITH ... SELECT` statement, requires the selected dataset's exact `bigquery_table_id`, rejects other tables, `INFORMATION_SCHEMA`, wildcard tables, BigQuery scripting, write/DDL/admin statements, and explicitly unsupported constructs such as external query functions and BigQuery ML prediction.
+
+### Validate Generated SQL
+
+`POST /queries/{query_request_id}/validate`
+
+Requires:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+Example:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/queries/12/validate" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+Safe validation returns `validation_status` as `passed` and `is_safe` as `true`. Unsafe SQL returns a normal response with `validation_status` as `failed`, `is_safe` as `false`, and populated `errors`.
+
+### Get Validation Result
+
+`GET /queries/{query_request_id}/validation`
+
+Requires:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+Example:
+
+```bash
+curl -X GET "http://127.0.0.1:8000/queries/12/validation" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+If a query has not been validated yet, the endpoint returns `400` with a clear message. Records not owned by the authenticated user return `404`.

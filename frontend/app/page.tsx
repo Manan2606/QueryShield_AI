@@ -20,6 +20,7 @@ import type {
   Dataset,
   DatasetColumn,
   QueryGenerateResponse,
+  SQLValidationResponse,
   User,
 } from "@/lib/types";
 
@@ -391,6 +392,14 @@ export default function Home() {
     }
   }
 
+
+  function handleValidationResult(operation: string, data: SQLValidationResponse) {
+    recordSuccess(operation, data);
+  }
+
+  function handleValidationError(operation: string, error: unknown) {
+    recordError(operation, error);
+  }
   async function handleGenerateSql(question: string) {
     if (!token || !selectedDataset) {
       return;
@@ -444,6 +453,8 @@ export default function Home() {
           generatedQuery={generatedQuery}
           loading={loading === "generateSql"}
           onGenerate={handleGenerateSql}
+          onValidationResult={handleValidationResult}
+          onValidationError={handleValidationError}
         />
         <ApiResponsePanel response={apiPanel} />
       </div>

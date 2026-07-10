@@ -89,6 +89,11 @@ export type QueryGenerateResponse = {
   model_name: string | null;
   status: string;
   created_at: string;
+  validation_status: string;
+  is_safe: boolean | null;
+  validation_errors: string[] | null;
+  validation_warnings: string[] | null;
+  validated_at: string | null;
 };
 
 export type QueryRequestSummary = {
@@ -100,6 +105,25 @@ export type QueryRequestSummary = {
   status: string;
   error_message: string | null;
   created_at: string;
+  validation_status: string;
+  is_safe: boolean | null;
+  validation_errors: string[] | null;
+  validation_warnings: string[] | null;
+  validated_at: string | null;
+};
+
+export type SQLValidationResponse = {
+  query_request_id: number;
+  dataset_id: number;
+  validation_status: string;
+  is_safe: boolean;
+  statement_type: string | null;
+  referenced_tables: string[];
+  errors: string[];
+  warnings: string[];
+  validated_at: string | null;
+  generated_sql: string;
+  normalized_sql: string | null;
 };
 export type ApiPanelState = {
   operation: string;

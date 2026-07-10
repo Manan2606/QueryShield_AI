@@ -338,3 +338,325 @@ def test_user_cannot_read_another_users_query_record(monkeypatch, client):
     response = client.get(f"/queries/{generate_response.json()['id']}", headers=other_headers)
 
     assert response.status_code == 404
+
+
+def _create_query_request_record(
+    user_id,
+    dataset_id,
+    *,
+    sql="SELECT region FROM `test-project.queryshield_demo.dataset_1_sales` LIMIT 10",
+    generation_status="generated",
+):
+    db = database.SessionLocal()
+    try:
+        query_request = QueryRequest(
+            user_id=user_id,
+            dataset_id=dataset_id,
+            natural_language_question="Test validation query",
+            generated_sql=sql,
+            generation_status=generation_status,
+            model_name="test-model",
+        )
+        db.add(query_request)
+        db.commit()
+        db.refresh(query_request)
+        return query_request.id
+    finally:
+        db.close()
+
+
+def _stored_query_request(query_request_id):
+    db = database.SessionLocal()
+    try:
+        return db.query(QueryRequest).filter(QueryRequest.id == query_request_id).first()
+    finally:
+        db.close()
+
+
+def _validate_sql(client, headers, user_id, sql, *, table_id="test-project.queryshield_demo.dataset_1_sales"):
+    dataset_id = _create_dataset_record(user_id, table_id=table_id)
+    query_request_id = _create_query_request_record(user_id, dataset_id, sql=sql)
+    response = client.post(f"/queries/{query_request_id}/validate", headers=headers)
+    return response, query_request_id, dataset_id
+
+
+def test_unauthenticated_user_cannot_validate_sql(client):
+    headers, user_id = _auth_headers(client, "validate-auth-owner@example.com")
+    dataset_id = _create_dataset_record(user_id)
+    query_request_id = _create_query_request_record(user_id, dataset_id)
+
+    response = client.post(f"/queries/{query_request_id}/validate")
+
+    assert response.status_code == 401
+
+
+def test_user_cannot_validate_another_users_query(client):
+    _owner_headers, owner_id = _auth_headers(client, "validate-owner@example.com")
+    other_headers, _other_id = _auth_headers(client, "validate-other@example.com")
+    dataset_id = _create_dataset_record(owner_id)
+    query_request_id = _create_query_request_record(owner_id, dataset_id)
+
+    response = client.post(f"/queries/{query_request_id}/validate", headers=other_headers)
+
+    assert response.status_code == 404
+
+
+def test_query_request_must_exist_for_validation(client):
+    headers, _user_id = _auth_headers(client, "validate-missing@example.com")
+
+    response = client.post("/queries/999999/validate", headers=headers)
+
+    assert response.status_code == 404
+
+
+def test_query_request_must_have_generated_sql_for_validation(client):
+    headers, user_id = _auth_headers(client, "validate-nosql@example.com")
+    dataset_id = _create_dataset_record(user_id)
+    query_request_id = _create_query_request_record(user_id, dataset_id, sql=None)
+
+    response = client.post(f"/queries/{query_request_id}/validate", headers=headers)
+
+    assert response.status_code == 400
+    assert "generated SQL" in response.json()["detail"]
+
+
+def test_query_request_dataset_must_belong_to_user_for_validation(client):
+    headers, user_id = _auth_headers(client, "validate-dataset-owner@example.com")
+    _other_headers, other_id = _auth_headers(client, "validate-dataset-other@example.com")
+    other_dataset_id = _create_dataset_record(other_id)
+    query_request_id = _create_query_request_record(user_id, other_dataset_id)
+
+    response = client.post(f"/queries/{query_request_id}/validate", headers=headers)
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Dataset not found"
+
+
+@pytest.mark.parametrize(
+    ("sql", "expected_statement"),
+    [
+        ("SELECT region FROM `test-project.queryshield_demo.dataset_1_sales` LIMIT 10", "SELECT"),
+        ("WITH regional_sales AS (SELECT region, SUM(total_amount) AS total_sales FROM `test-project.queryshield_demo.dataset_1_sales` GROUP BY region) SELECT region, total_sales FROM regional_sales", "SELECT"),
+        ("WITH regional_sales AS (SELECT region FROM `test-project.queryshield_demo.dataset_1_sales`) SELECT * FROM regional_sales", "SELECT"),
+        ("SELECT region FROM (SELECT region FROM `test-project.queryshield_demo.dataset_1_sales`) nested_sales LIMIT 5", "SELECT"),
+    ],
+)
+def test_safe_select_cte_and_nested_queries_pass(client, sql, expected_statement):
+    headers, user_id = _auth_headers(client, f"safe-{abs(hash(sql))}@example.com")
+
+    response, query_request_id, dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["query_request_id"] == query_request_id
+    assert payload["dataset_id"] == dataset_id
+    assert payload["validation_status"] == "passed"
+    assert payload["is_safe"] is True
+    assert payload["statement_type"] == expected_statement
+    assert payload["referenced_tables"] == ["test-project.queryshield_demo.dataset_1_sales"]
+    assert payload["errors"] == []
+    assert payload["validated_at"] is not None
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DELETE FROM `test-project.queryshield_demo.dataset_1_sales` WHERE TRUE",
+        "UPDATE `test-project.queryshield_demo.dataset_1_sales` SET region = 'West' WHERE TRUE",
+        "INSERT INTO `test-project.queryshield_demo.dataset_1_sales` (region) VALUES ('West')",
+        "DROP TABLE `test-project.queryshield_demo.dataset_1_sales`",
+        "CREATE TABLE `test-project.queryshield_demo.new_table` AS SELECT 1",
+        "MERGE `test-project.queryshield_demo.dataset_1_sales` T USING `test-project.queryshield_demo.dataset_1_sales` S ON FALSE WHEN NOT MATCHED THEN INSERT (region) VALUES ('West')",
+    ],
+)
+def test_write_and_ddl_statements_fail_validation(client, sql):
+    headers, user_id = _auth_headers(client, f"unsafe-{abs(hash(sql))}@example.com")
+
+    response, _query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["validation_status"] == "failed"
+    assert payload["is_safe"] is False
+    assert "Only read-only SELECT queries are allowed" in payload["errors"]
+
+
+def test_multiple_statements_fail_validation(client):
+    headers, user_id = _auth_headers(client, "validate-multistmt@example.com")
+    sql = "SELECT * FROM `test-project.queryshield_demo.dataset_1_sales`; DROP TABLE `test-project.queryshield_demo.dataset_1_sales`"
+
+    response, _query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    assert response.json()["is_safe"] is False
+    assert "Exactly one SQL statement is allowed" in response.json()["errors"]
+
+
+def test_querying_another_table_fails_validation(client):
+    headers, user_id = _auth_headers(client, "validate-wrong-table@example.com")
+    sql = "SELECT * FROM `another-project.other_dataset.customers`"
+
+    response, _query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["is_safe"] is False
+    assert any("unauthorized table" in error for error in payload["errors"])
+
+
+def test_information_schema_fails_validation(client):
+    headers, user_id = _auth_headers(client, "validate-information-schema@example.com")
+    sql = "SELECT * FROM `test-project.queryshield_demo.INFORMATION_SCHEMA.TABLES`"
+
+    response, _query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    assert "INFORMATION_SCHEMA access is not allowed" in response.json()["errors"]
+
+
+def test_wildcard_table_reference_fails_validation(client):
+    headers, user_id = _auth_headers(client, "validate-wildcard@example.com")
+    sql = "SELECT * FROM `test-project.queryshield_demo.events_*`"
+
+    response, _query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    assert "Wildcard table access is not allowed" in response.json()["errors"]
+
+
+def test_select_without_selected_table_fails_validation(client):
+    headers, user_id = _auth_headers(client, "validate-select-one@example.com")
+    sql = "SELECT 1"
+
+    response, _query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    assert "SQL must reference the selected BigQuery table" in response.json()["errors"]
+
+
+def test_select_star_returns_warning(client):
+    headers, user_id = _auth_headers(client, "validate-star@example.com")
+    sql = "SELECT * FROM `test-project.queryshield_demo.dataset_1_sales` LIMIT 10"
+
+    response, _query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["is_safe"] is True
+    assert "SELECT * may scan unnecessary columns" in payload["warnings"]
+
+
+def test_raw_query_without_limit_returns_warning(client):
+    headers, user_id = _auth_headers(client, "validate-no-limit@example.com")
+    sql = "SELECT region FROM `test-project.queryshield_demo.dataset_1_sales`"
+
+    response, _query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["is_safe"] is True
+    assert "Query may return many rows because no LIMIT is present" in payload["warnings"]
+
+
+def test_explicit_cross_join_fails_validation(client):
+    headers, user_id = _auth_headers(client, "validate-cross-join@example.com")
+    sql = "SELECT a.region FROM `test-project.queryshield_demo.dataset_1_sales` a CROSS JOIN `test-project.queryshield_demo.dataset_1_sales` b"
+
+    response, _query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    assert "Explicit CROSS JOIN is not allowed" in response.json()["errors"]
+
+
+def test_parse_failure_returns_unsafe_validation_result(client):
+    headers, user_id = _auth_headers(client, "validate-parse-failure@example.com")
+    sql = "SELECT FROM"
+
+    response, _query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["validation_status"] == "failed"
+    assert payload["is_safe"] is False
+    assert payload["errors"] == ["SQL could not be parsed"]
+
+
+def test_validation_result_is_stored_and_retrievable(client):
+    headers, user_id = _auth_headers(client, "validate-stored@example.com")
+    sql = "SELECT region FROM `test-project.queryshield_demo.dataset_1_sales` LIMIT 10"
+    response, query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+    assert response.status_code == 200
+
+    stored_response = client.get(f"/queries/{query_request_id}/validation", headers=headers)
+
+    assert stored_response.status_code == 200
+    payload = stored_response.json()
+    assert payload["validation_status"] == "passed"
+    assert payload["is_safe"] is True
+    assert payload["referenced_tables"] == ["test-project.queryshield_demo.dataset_1_sales"]
+    stored = _stored_query_request(query_request_id)
+    assert stored.validation_status == "passed"
+    assert stored.is_safe is True
+    assert stored.validated_at is not None
+
+
+def test_failed_validation_status_is_stored(client):
+    headers, user_id = _auth_headers(client, "validate-failed-stored@example.com")
+    sql = "DELETE FROM `test-project.queryshield_demo.dataset_1_sales` WHERE TRUE"
+
+    response, query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    stored = _stored_query_request(query_request_id)
+    assert stored.validation_status == "failed"
+    assert stored.is_safe is False
+    assert stored.validation_errors
+
+
+def test_get_validation_before_validation_returns_400(client):
+    headers, user_id = _auth_headers(client, "validate-before-get@example.com")
+    dataset_id = _create_dataset_record(user_id)
+    query_request_id = _create_query_request_record(user_id, dataset_id)
+
+    response = client.get(f"/queries/{query_request_id}/validation", headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Query request has not been validated"
+
+
+def test_existing_step7_generation_response_includes_validation_summary(monkeypatch, client):
+    headers, user_id = _auth_headers(client, "step7-validation-summary@example.com")
+    dataset_id = _create_dataset_record(user_id)
+    monkeypatch.setattr(
+        "app.services.query_generation_service.generate_bigquery_sql",
+        lambda table_id, columns, question: f"SELECT region FROM `{table_id}` LIMIT 10",
+    )
+
+    response = client.post(
+        "/queries/generate",
+        json={"dataset_id": dataset_id, "question": "Show regions"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "generated"
+    assert payload["validation_status"] == "not_validated"
+    assert payload["is_safe"] is None
+
+
+def test_validation_does_not_execute_sql_or_run_bigquery_dry_run(monkeypatch, client):
+    headers, user_id = _auth_headers(client, "validate-no-execute@example.com")
+    sql = "SELECT region FROM `test-project.queryshield_demo.dataset_1_sales` LIMIT 10"
+
+    def fail_if_bigquery_client_is_requested(*args, **kwargs):
+        raise AssertionError("BigQuery should not be called during SQL validation")
+
+    monkeypatch.setattr("app.services.bigquery_service.get_bigquery_client", fail_if_bigquery_client_is_requested)
+    response, _query_request_id, _dataset_id = _validate_sql(client, headers, user_id, sql)
+
+    assert response.status_code == 200
+    response_text = response.text.lower()
+    assert "total_bytes" not in response_text
+    assert "num_rows" not in response_text
+    assert "dry" not in response_text

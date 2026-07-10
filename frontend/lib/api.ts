@@ -8,6 +8,7 @@ import type {
   DatasetDetail,
   QueryGenerateResponse,
   QueryRequestSummary,
+  SQLValidationResponse,
   User,
 } from "./types";
 
@@ -178,4 +179,13 @@ export function generateSql(token: string, payload: { dataset_id: number; questi
 export function listQueryRequests(token: string, datasetId?: number) {
   const query = datasetId ? `?dataset_id=${datasetId}` : "";
   return apiRequest<QueryRequestSummary[]>(`/queries${query}`, { token });
+}
+
+
+export function validateSql(token: string, queryRequestId: number) {
+  return apiRequest<SQLValidationResponse>(`/queries/${queryRequestId}/validate`, { method: "POST", token });
+}
+
+export function getSqlValidation(token: string, queryRequestId: number) {
+  return apiRequest<SQLValidationResponse>(`/queries/${queryRequestId}/validation`, { token });
 }
