@@ -75,7 +75,9 @@ Apply migrations from `backend/` with:
 python -m alembic upgrade head
 ```
 
-The SQLite database file is `queryshield.db`. For a clean local reset, stop the backend, delete that `.db` file, then rerun `python -m alembic upgrade head.`r`n`r`n## Authentication (Step 3)
+The SQLite database file is `queryshield.db`. For a clean local reset, stop the backend, delete that `.db` file, then rerun `python -m alembic upgrade head.
+
+## Authentication (Step 3)
 
 ### Signup
 
@@ -389,3 +391,142 @@ curl -X GET "http://127.0.0.1:8000/queries/12/dry-run" \
 ```
 
 If no dry run has occurred, the endpoint returns `400` with a clear message. A successful dry run does not execute the query. Real execution will be implemented separately in Step 10 and must independently re-check all safety and cost gates.
+
+## Step 10: Controlled BigQuery Execution
+
+Step 10 is the first step that actually runs a query. The execution endpoint never accepts raw SQL, edited SQL, a dataset override, a bytes override, a timeout override, or a safety bypass. It executes only the generated SQL already stored on an owned `QueryRequest`.
+
+Before contacting BigQuery, the backend re-checks ownership, generation, SQL validation, `is_safe`, dry-run status, dry-run validity, bytes limit status, `execution_eligible`, dataset ownership, loaded status, table ID presence, and stale table context. It also re-runs SQL safety validation against the current dataset table. If the dataset table changed after generation, the query is blocked and must be regenerated, revalidated, and dry-run again.
+
+Execution uses BigQuery Standard SQL and applies `maximum_bytes_billed` to the real query job as a hard defense-in-depth limit. The backend waits only up to `QUERY_TIMEOUT_SECONDS`, attempts cancellation on timeout, returns only a bounded result set, and stores only those bounded rows.
+
+Configure these values in `backend/.env`:
+
+```env
+MAX_BYTES_BILLED=100000000
+QUERY_RESULT_ROW_LIMIT=100
+QUERY_TIMEOUT_SECONDS=30
+```
+
+`execution_eligible` means the query passed all pre-execution gates and may be executed. A successful execution does not make it false. Stale table context, failed execution-time validation, or bytes-limit problems make it false. Transient BigQuery or network failures may leave it true.
+
+### Execute Eligible Query
+
+`POST /queries/{query_request_id}/execute`
+
+Requires:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+Optional request:
+
+```json
+{
+  "row_limit": 50
+}
+```
+
+Example:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/queries/12/execute" \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"row_limit":50}'
+```
+
+A successful response includes execution status, BigQuery job ID, location, bytes processed, bytes billed, cache-hit state when available, result columns, bounded rows, truncation status, timestamps, and the stored generated SQL. If `result_truncated` is true, only the first configured rows are stored and returned.
+
+Blocked execution returns `400`, `404`, or `409` with a clear safe message. Credentials, credential paths, secrets, and stack traces are not exposed.
+
+### Get Stored Execution
+
+`GET /queries/{query_request_id}/execution`
+
+Requires:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+Example:
+
+```bash
+curl -X GET "http://127.0.0.1:8000/queries/12/execution" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+If no execution has occurred, the endpoint returns `400`. Records not owned by the authenticated user return `404`. The response returns only the latest stored bounded result rows.
+
+## Step 11: Query History and Audit Trail
+
+Step 11 adds a read-only history and audit experience for each authenticated user's own query lifecycle records. Opening history or query details does not generate SQL, validate SQL, run a dry run, or execute BigQuery.
+
+Users can review generation, validation, dry-run, execution, bounded result rows, timestamps, warnings, errors, and related audit events. List responses stay compact and do not include full result rows.
+
+### Query History
+
+`GET /queries`
+
+Requires:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+Supported filters include `skip`, `limit`, `dataset_id`, `generation_status`, `validation_status`, `dry_run_status`, `execution_status`, `is_safe`, `execution_eligible`, `search`, `created_from`, `created_to`, and `sort_order`.
+
+Example:
+
+```bash
+curl -X GET "http://127.0.0.1:8000/queries?dataset_id=1&execution_status=succeeded&limit=25" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+The response includes `items`, `skip`, `limit`, `total`, and `has_more`. Users see only their own query records.
+
+### Query Lifecycle
+
+`GET /queries/{query_request_id}`
+
+Requires:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+This returns nested `query`, `generation`, `validation`, `dry_run`, `execution`, and `audit_summary` sections. Execution result rows are the bounded rows already stored by Step 10.
+
+### Audit Logs
+
+`GET /audit-logs`
+
+Requires:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+Supported filters include `skip`, `limit`, `action`, `resource_type`, `resource_id`, `created_from`, `created_to`, and `sort_order`.
+
+Audit logs are restricted to `audit_logs.user_id == current_user.id`. System-wide or other-user audit records are not exposed through this endpoint. Audit details are structured metadata and are sanitized to avoid passwords, JWTs, API keys, credentials, service account data, and database URLs.
+
+### Query Audit Timeline
+
+`GET /queries/{query_request_id}/audit-logs`
+
+Requires:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+This returns chronological audit events for one owned query request.
+
+### Retention and Dataset Deletion
+
+This MVP preserves history records unless users explicitly delete data through supported workflows. Production deployments should define retention policies for audit logs, query metadata, stored bounded result rows, uploaded CSV files, and BigQuery tables.
+
+To avoid accidentally destroying governance records, dataset deletion is blocked when query history exists for that dataset. A future step can introduce soft deletion or a formal retention workflow if needed.

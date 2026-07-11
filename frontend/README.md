@@ -1,8 +1,6 @@
-# QueryShield AI Test Console
+# QueryShield AI Frontend
 
-Temporary Next.js frontend for testing the completed QueryShield AI backend from a browser.
-
-This is not the production frontend. It intentionally avoids Gemini, natural-language questions, SQL generation, SQL validation, query execution, charts, OAuth, NextAuth, Redux, React Query, and advanced dashboards.
+Next.js App Router frontend for the QueryShield AI Phase-1 MVP.
 
 ## Stack
 
@@ -11,30 +9,11 @@ This is not the production frontend. It intentionally avoids Gemini, natural-lan
 - Tailwind CSS
 - Native browser `fetch`
 - React hooks
-- `localStorage` for the temporary JWT token
+- `localStorage` token storage for the MVP auth guard
 
-## Run Backend
+## Run
 
-From the repository root:
-
-```powershell
-cd backend
-.venv\Scripts\activate
-python -m pip install -r requirements.txt
-python -m uvicorn app.main:app --reload
-```
-
-Backend:
-
-http://127.0.0.1:8000
-
-Backend docs:
-
-http://127.0.0.1:8000/docs
-
-## Run Frontend
-
-Open another terminal:
+Start the backend first, then run:
 
 ```powershell
 cd frontend
@@ -43,30 +22,27 @@ npm install
 npm run dev
 ```
 
-On macOS/Linux, use `cp .env.example .env.local` instead of `Copy-Item`.
+Frontend: http://localhost:3000
 
-Frontend:
+`frontend/.env.local` should contain:
 
-http://localhost:3000
+```env
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+```
 
-## Full Manual Testing Flow
+## Routes
 
-1. Check backend health.
-2. Sign up.
-3. Log in.
-4. Verify current user.
-5. Create a dataset.
-6. Select the dataset.
-7. Upload a CSV.
-8. Preview the CSV.
-9. Load the dataset into BigQuery.
-10. Fetch BigQuery table information.
-11. Delete the test dataset if desired.
+- `/login` and `/signup`: public authentication screens.
+- `/dashboard`: protected summary of datasets and recent query lifecycle activity.
+- `/datasets`: protected dataset creation, filtering, navigation, and deletion.
+- `/datasets/[id]`: protected CSV upload, schema, preview, and BigQuery load workflow.
+- `/queries/new`: protected governed query workspace for generate, validate, dry run, and bounded execute.
+- `/history`: protected query lifecycle list with filters.
+- `/queries/[id]`: protected query lifecycle detail, stored results, and audit timeline.
+- `/audit-logs`: protected audit event list with filters.
 
-Google credentials must be configured in the backend before testing BigQuery loading.
+Protected routes validate the stored token by calling `/users/me`. Invalid or missing tokens are cleared and redirected to `/login`.
 
 ## Security Note
 
-This is an internal local testing frontend. Using `localStorage` for the access token is acceptable for this temporary console, but a production frontend should reconsider token storage and may use secure HTTP-only cookies.
-
-Never store passwords, service account keys, Google credentials, or raw secrets in this frontend. Only `NEXT_PUBLIC_API_BASE_URL` belongs in frontend environment configuration.
+Only expose `NEXT_PUBLIC_API_BASE_URL` to the browser. Do not place backend secrets, Google service account files, passwords, or raw credentials in frontend environment variables.

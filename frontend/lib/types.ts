@@ -138,6 +138,33 @@ export type SQLValidationResponse = {
   normalized_sql: string | null;
 };
 
+export type QueryResultColumn = {
+  name: string;
+  field_type: string;
+  mode: string | null;
+};
+
+export type QueryExecutionResponse = {
+  query_request_id: number;
+  dataset_id: number;
+  execution_status: string;
+  execution_job_id: string | null;
+  execution_location: string | null;
+  execution_bytes_processed: number | null;
+  execution_bytes_billed: number | null;
+  execution_cache_hit: boolean | null;
+  result_row_count: number;
+  result_columns: QueryResultColumn[];
+  result_rows: Record<string, unknown>[];
+  result_truncated: boolean;
+  row_limit: number;
+  execution_error: string | null;
+  execution_started_at: string | null;
+  execution_completed_at: string | null;
+  executed_at: string | null;
+  generated_sql: string;
+};
+
 export type QueryDryRunResponse = {
   query_request_id: number;
   dataset_id: number;
@@ -175,4 +202,119 @@ export type BackendStatusResult = {
   ok: boolean;
   status?: number;
   message: string;
+};
+
+export type QueryHistoryItem = {
+  id: number;
+  dataset_id: number;
+  dataset_name: string | null;
+  question: string;
+  generated_sql_preview: string | null;
+  generation_status: string;
+  validation_status: string;
+  is_safe: boolean | null;
+  dry_run_status: string;
+  estimated_bytes_processed: number | null;
+  estimated_cost: string | null;
+  estimated_cost_currency: string | null;
+  bytes_limit_exceeded: boolean | null;
+  execution_eligible: boolean;
+  execution_status: string;
+  result_row_count: number | null;
+  result_truncated: boolean | null;
+  created_at: string;
+  validated_at: string | null;
+  dry_run_at: string | null;
+  executed_at: string | null;
+};
+
+export type QueryHistoryListResponse = {
+  items: QueryHistoryItem[];
+  skip: number;
+  limit: number;
+  total: number;
+  has_more: boolean;
+};
+
+export type QueryLifecycleResponse = {
+  query: {
+    id: number;
+    user_id: number;
+    dataset_id: number;
+    dataset_name: string | null;
+    bigquery_table_id: string | null;
+    question: string;
+    created_at: string;
+    updated_at: string;
+  };
+  generation: {
+    status: string;
+    model_name: string | null;
+    generated_sql: string | null;
+    generated_for_table_id: string | null;
+    error_message: string | null;
+  };
+  validation: {
+    status: string;
+    is_safe: boolean | null;
+    statement_type: string | null;
+    referenced_tables: string[];
+    errors: string[];
+    warnings: string[];
+    validated_at: string | null;
+  };
+  dry_run: {
+    status: string;
+    dry_run_valid: boolean | null;
+    estimated_bytes_processed: number | null;
+    estimated_mib_processed: number | null;
+    estimated_gib_processed: number | null;
+    estimated_tib_processed: number | null;
+    maximum_bytes_billed: number | null;
+    estimated_cost: string | null;
+    estimated_cost_currency: string | null;
+    bytes_limit_exceeded: boolean | null;
+    execution_eligible: boolean;
+    dry_run_error: string | null;
+    dry_run_job_id: string | null;
+    dry_run_location: string | null;
+    dry_run_at: string | null;
+  };
+  execution: {
+    status: string;
+    execution_job_id: string | null;
+    execution_location: string | null;
+    execution_bytes_processed: number | null;
+    execution_bytes_billed: number | null;
+    execution_cache_hit: boolean | null;
+    result_row_count: number | null;
+    result_columns: QueryResultColumn[];
+    result_rows: Record<string, unknown>[];
+    result_truncated: boolean | null;
+    execution_error: string | null;
+    execution_started_at: string | null;
+    execution_completed_at: string | null;
+    executed_at: string | null;
+  };
+  audit_summary: {
+    total_events: number;
+    latest_event_at: string | null;
+  };
+};
+
+export type AuditLog = {
+  id: number;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  details: Record<string, unknown> | null;
+  created_at: string;
+};
+
+export type AuditLogListResponse = {
+  items: AuditLog[];
+  skip: number;
+  limit: number;
+  total: number;
+  has_more: boolean;
 };

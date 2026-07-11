@@ -128,6 +128,7 @@ def generate_sql_for_dataset(db: Session, user_id: int, dataset_id: int, questio
         validated_sql = validate_generated_sql(cleaned_sql, dataset.bigquery_table_id).sql
 
         query_request.generated_sql = validated_sql
+        query_request.generated_for_table_id = dataset.bigquery_table_id
         query_request.model_name = settings.GEMINI_MODEL
         query_request.generation_status = "generated"
         query_request.error_message = None

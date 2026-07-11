@@ -7,16 +7,17 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.core.config import settings
 from app.db.database import get_db
-from app.models.audit_log import AuditLog
 from app.models.dataset_column import DatasetColumn
 from app.models.user import User
 from app.schemas.bigquery import BigQueryLoadResponse, BigQueryTableInfoResponse
 from app.schemas.dataset import DatasetCreate, DatasetDetailResponse, DatasetResponse, DatasetUpdate
 from app.schemas.upload import CSVPreviewResponse, CSVUploadResponse
+from app.services.audit_service import create_audit_log
 from app.services.bigquery_service import get_bigquery_table_info as fetch_bigquery_table_info
 from app.services.bigquery_service import load_csv_to_bigquery
 from app.services.csv_service import analyze_csv, preview_csv, save_upload_file, validate_csv_file
 from app.services.dataset_service import (
+    DatasetDeletionBlocked,
     create_dataset,
     delete_user_dataset,
     get_user_dataset_by_id,
@@ -35,15 +36,7 @@ def _add_audit_log(
     dataset_id: int,
     details: dict | None = None,
 ) -> None:
-    db.add(
-        AuditLog(
-            user_id=user_id,
-            action=action,
-            resource_type="dataset",
-            resource_id=str(dataset_id),
-            details=details,
-        )
-    )
+    create_audit_log(db, user_id, action, "dataset", str(dataset_id), details)
 
 
 @router.post("", response_model=DatasetResponse, status_code=status.HTTP_201_CREATED)
@@ -53,6 +46,8 @@ def create_dataset_endpoint(
     current_user: User = Depends(get_current_user),
 ) -> DatasetResponse:
     dataset = create_dataset(db, current_user.id, dataset_in)
+    create_audit_log(db, current_user.id, "dataset.created", "dataset", str(dataset.id), {"dataset_id": dataset.id, "name": dataset.name})
+    db.commit()
     return DatasetResponse.model_validate(dataset)
 
 
@@ -89,6 +84,8 @@ def update_dataset(
     dataset = update_user_dataset(db, current_user.id, dataset_id, dataset_in)
     if dataset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
+    create_audit_log(db, current_user.id, "dataset.updated", "dataset", str(dataset.id), {"dataset_id": dataset.id})
+    db.commit()
     return DatasetResponse.model_validate(dataset)
 
 
@@ -98,9 +95,14 @@ def delete_dataset(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
-    dataset = delete_user_dataset(db, current_user.id, dataset_id)
+    try:
+        dataset = delete_user_dataset(db, current_user.id, dataset_id)
+    except DatasetDeletionBlocked as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if dataset is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
+    create_audit_log(db, current_user.id, "dataset.deleted", "dataset", str(dataset.id), {"dataset_id": dataset.id, "name": dataset.name})
+    db.commit()
     return {"message": "Dataset deleted successfully"}
 
 
@@ -146,6 +148,15 @@ def upload_csv(
     dataset.status = "schema_detected"
     dataset.row_count = analysis["row_count"]
     dataset.column_count = analysis["column_count"]
+    create_audit_log(db, current_user.id, "dataset.csv_uploaded", "dataset", str(dataset.id), {"dataset_id": dataset.id, "filename": original_filename})
+    create_audit_log(
+        db,
+        current_user.id,
+        "dataset.schema_detected",
+        "dataset",
+        str(dataset.id),
+        {"dataset_id": dataset.id, "row_count": analysis["row_count"], "column_count": analysis["column_count"]},
+    )
     db.commit()
     db.refresh(dataset)
 

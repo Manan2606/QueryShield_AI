@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +16,8 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
     MAX_BYTES_BILLED: int = 100000000
+    QUERY_RESULT_ROW_LIMIT: int = 100
+    QUERY_TIMEOUT_SECONDS: int = 30
     BIGQUERY_ON_DEMAND_PRICE_PER_TIB: Decimal = Decimal("6.25")
     BIGQUERY_CURRENCY: str = "USD"
     UPLOAD_DIR: str = "./storage/uploads"
@@ -34,6 +37,13 @@ class Settings(BaseSettings):
             for origin in self.FRONTEND_ORIGINS.split(",")
             if origin.strip()
         ]
+
+    @field_validator("MAX_BYTES_BILLED", "QUERY_RESULT_ROW_LIMIT", "QUERY_TIMEOUT_SECONDS")
+    @classmethod
+    def positive_int(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Configured query limits must be greater than 0")
+        return value
 
 
 settings = Settings()

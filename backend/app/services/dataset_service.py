@@ -1,7 +1,12 @@
 from sqlalchemy.orm import Session
 
 from app.models.dataset import Dataset
+from app.models.query_request import QueryRequest
 from app.schemas.dataset import DatasetCreate, DatasetUpdate
+
+
+class DatasetDeletionBlocked(RuntimeError):
+    pass
 
 
 def create_dataset(db: Session, owner_id: int, dataset_in: DatasetCreate) -> Dataset:
@@ -45,6 +50,10 @@ def delete_user_dataset(db: Session, owner_id: int, dataset_id: int) -> Dataset 
     dataset = get_user_dataset_by_id(db, owner_id, dataset_id)
     if dataset is None:
         return None
+
+    has_query_history = db.query(QueryRequest.id).filter(QueryRequest.dataset_id == dataset.id).first() is not None
+    if has_query_history:
+        raise DatasetDeletionBlocked("Dataset has query history and cannot be deleted in this MVP")
 
     db.delete(dataset)
     db.commit()

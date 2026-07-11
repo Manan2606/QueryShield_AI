@@ -180,3 +180,89 @@ def run_query_dry_run(sql: str) -> QueryDryRunResult:
         location=getattr(query_job, "location", None),
         estimate_accuracy=getattr(query_job, "estimated_bytes_processed_accuracy", None),
     )
+
+
+@dataclass(frozen=True)
+class QueryResultColumn:
+    name: str
+    field_type: str
+    mode: str | None = None
+
+
+@dataclass(frozen=True)
+class QueryExecutionResult:
+    job_id: str | None
+    location: str | None
+    total_bytes_processed: int | None
+    total_bytes_billed: int | None
+    cache_hit: bool | None
+    columns: list[QueryResultColumn]
+    rows: list[dict[str, Any]]
+    result_truncated: bool
+
+
+class BigQueryExecutionTimeout(TimeoutError):
+    def __init__(self, message: str, job_id: str | None = None):
+        super().__init__(message)
+        self.job_id = job_id
+
+
+def _row_to_mapping(row: Any, field_names: list[str]) -> dict[str, Any]:
+    if isinstance(row, dict):
+        return dict(row)
+    if hasattr(row, "items"):
+        try:
+            return dict(row.items())
+        except Exception:
+            pass
+    if field_names:
+        return {name: row[index] for index, name in enumerate(field_names)}
+    return dict(row)
+
+
+def execute_query(
+    sql: str,
+    maximum_bytes_billed: int,
+    row_limit: int,
+    timeout_seconds: int,
+) -> QueryExecutionResult:
+    bigquery = _get_bigquery_module()
+    client = get_bigquery_client()
+    job_config = bigquery.QueryJobConfig(
+        use_legacy_sql=False,
+        maximum_bytes_billed=maximum_bytes_billed,
+        use_query_cache=True,
+    )
+    query_job = client.query(sql, job_config=job_config)
+
+    try:
+        row_iterator = query_job.result(timeout=timeout_seconds, max_results=row_limit + 1)
+    except TimeoutError as exc:
+        try:
+            query_job.cancel()
+        finally:
+            raise BigQueryExecutionTimeout("The query timed out before completion.", getattr(query_job, "job_id", None)) from exc
+
+    schema = list(getattr(row_iterator, "schema", None) or getattr(query_job, "schema", []) or [])
+    columns = [
+        QueryResultColumn(
+            name=getattr(field, "name", ""),
+            field_type=getattr(field, "field_type", getattr(field, "type", "")),
+            mode=getattr(field, "mode", None),
+        )
+        for field in schema
+    ]
+    field_names = [column.name for column in columns]
+    fetched_rows = [_row_to_mapping(row, field_names) for row in row_iterator]
+    result_truncated = len(fetched_rows) > row_limit
+
+    return QueryExecutionResult(
+        job_id=getattr(query_job, "job_id", None),
+        location=getattr(query_job, "location", None),
+        total_bytes_processed=getattr(query_job, "total_bytes_processed", None),
+        total_bytes_billed=getattr(query_job, "total_bytes_billed", None),
+        cache_hit=getattr(query_job, "cache_hit", None),
+        columns=columns,
+        rows=fetched_rows[:row_limit],
+        result_truncated=result_truncated,
+    )

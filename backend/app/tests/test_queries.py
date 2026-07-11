@@ -1,4 +1,6 @@
 import os
+from datetime import date, datetime
+from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,9 +15,11 @@ os.environ.setdefault("GEMINI_MODEL", "gemini-2.5-flash")
 
 from app.db import database
 from app.main import app
+from app.models.audit_log import AuditLog
 from app.models.dataset import Dataset
 from app.models.dataset_column import DatasetColumn
 from app.models.query_request import QueryRequest
+from app.services.bigquery_service import BigQueryExecutionTimeout, QueryExecutionResult, QueryResultColumn
 
 
 @pytest.fixture()
@@ -314,7 +318,9 @@ def test_user_can_list_only_their_own_query_records(monkeypatch, client):
     response = client.get("/queries", headers=owner_headers)
 
     assert response.status_code == 200
-    records = response.json()
+    payload = response.json()
+    records = payload["items"]
+    assert payload["total"] == 1
     assert len(records) == 1
     assert records[0]["dataset_id"] == owner_dataset_id
 
@@ -354,6 +360,7 @@ def _create_query_request_record(
             dataset_id=dataset_id,
             natural_language_question="Test validation query",
             generated_sql=sql,
+            generated_for_table_id="test-project.queryshield_demo.dataset_1_sales",
             generation_status=generation_status,
             model_name="test-model",
         )
@@ -956,3 +963,570 @@ def test_existing_generation_and_validation_still_work_after_dry_run_fields(monk
     assert validate_response.status_code == 200
     assert validate_response.json()["validation_status"] == "passed"
     assert generate_response.json()["dry_run_status"] == "not_run"
+
+
+
+def _execution_ready_query(
+    client,
+    email="execute@example.com",
+    *,
+    dataset_status="loaded",
+    table_id="test-project.queryshield_demo.dataset_1_sales",
+    sql="SELECT region FROM `test-project.queryshield_demo.dataset_1_sales` LIMIT 10",
+    generation_status="generated",
+    validation_status="passed",
+    is_safe=True,
+    dry_run_status="passed",
+    dry_run_valid=True,
+    bytes_limit_exceeded=False,
+    execution_eligible=True,
+    estimated_bytes_processed=1_048_576,
+):
+    headers, user_id = _auth_headers(client, email)
+    dataset_id = _create_dataset_record(user_id, status=dataset_status, table_id=table_id)
+    query_request_id = _create_query_request_record(user_id, dataset_id, sql=sql, generation_status=generation_status)
+    db = database.SessionLocal()
+    try:
+        query_request = db.query(QueryRequest).filter(QueryRequest.id == query_request_id).first()
+        query_request.generated_for_table_id = table_id
+        query_request.validation_status = validation_status
+        query_request.is_safe = is_safe
+        query_request.dry_run_status = dry_run_status
+        query_request.dry_run_valid = dry_run_valid
+        query_request.estimated_bytes_processed = estimated_bytes_processed
+        query_request.maximum_bytes_billed = 100_000_000
+        query_request.bytes_limit_exceeded = bytes_limit_exceeded
+        query_request.execution_eligible = execution_eligible
+        db.commit()
+    finally:
+        db.close()
+    return headers, user_id, dataset_id, query_request_id
+
+
+def _fake_execution_result(rows=None, *, truncated=False):
+    return QueryExecutionResult(
+        job_id="exec_job_1",
+        location="US",
+        total_bytes_processed=1_048_576,
+        total_bytes_billed=1_048_576,
+        cache_hit=False,
+        columns=[
+            QueryResultColumn(name="region", field_type="STRING", mode="NULLABLE"),
+            QueryResultColumn(name="total_sales", field_type="NUMERIC", mode="NULLABLE"),
+        ],
+        rows=rows if rows is not None else [{"region": "South", "total_sales": Decimal("1849.25")}],
+        result_truncated=truncated,
+    )
+
+
+def test_unauthenticated_user_cannot_execute_query(client):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-auth@example.com")
+
+    response = client.post(f"/queries/{query_request_id}/execute")
+
+    assert response.status_code == 401
+
+
+def test_user_cannot_execute_another_users_query(client):
+    _owner_headers, owner_id = _auth_headers(client, "execute-owner@example.com")
+    other_headers, _other_id = _auth_headers(client, "execute-other@example.com")
+    dataset_id = _create_dataset_record(owner_id)
+    query_request_id = _create_query_request_record(owner_id, dataset_id)
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=other_headers)
+
+    assert response.status_code == 404
+
+
+def test_execute_query_request_must_exist(client):
+    headers, _user_id = _auth_headers(client, "execute-missing@example.com")
+
+    response = client.post("/queries/999999/execute", headers=headers)
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_detail"),
+    [
+        ("generated_sql", None, "generated SQL"),
+        ("generation_status", "failed", "generation"),
+        ("validation_status", "failed", "SQL safety validation"),
+        ("is_safe", False, "marked safe"),
+        ("dry_run_status", "failed", "dry run"),
+        ("dry_run_valid", False, "dry run"),
+        ("bytes_limit_exceeded", True, "estimated bytes"),
+        ("execution_eligible", False, "not eligible"),
+        ("estimated_bytes_processed", None, "estimated bytes"),
+    ],
+)
+def test_execute_requires_all_pre_execution_gates(client, field, value, expected_detail):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, f"execute-gate-{field}@example.com")
+    db = database.SessionLocal()
+    try:
+        query_request = db.query(QueryRequest).filter(QueryRequest.id == query_request_id).first()
+        setattr(query_request, field, value)
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers)
+
+    assert response.status_code == 409
+    assert expected_detail in response.json()["detail"]
+    stored = _stored_query_request(query_request_id)
+    assert stored.execution_status == "blocked"
+
+
+def test_execute_requires_dataset_to_still_belong_to_user(client):
+    headers, user_id, dataset_id, query_request_id = _execution_ready_query(client, "execute-dataset-owner@example.com")
+    _other_headers, other_id = _auth_headers(client, "execute-dataset-other@example.com")
+    db = database.SessionLocal()
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        dataset.owner_id = other_id
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers)
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Dataset not found"
+
+
+def test_execute_requires_dataset_still_loaded(client):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-unloaded@example.com", dataset_status="schema_detected")
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers)
+
+    assert response.status_code == 409
+    assert "loaded into BigQuery" in response.json()["detail"]
+
+
+def test_execute_blocks_stale_table_context(client):
+    headers, _user_id, dataset_id, query_request_id = _execution_ready_query(client, "execute-stale@example.com")
+    db = database.SessionLocal()
+    try:
+        dataset = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+        dataset.bigquery_table_id = "test-project.queryshield_demo.reloaded_table"
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers)
+
+    assert response.status_code == 409
+    assert "changed after generation" in response.json()["detail"]
+    assert _stored_query_request(query_request_id).execution_eligible is False
+
+
+def test_execute_revalidates_stored_sql_before_bigquery(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(
+        client,
+        "execute-revalidate@example.com",
+        sql="SELECT * FROM `another-project.other_dataset.customers`",
+    )
+    called = {"bigquery": False}
+
+    def fake_execute(*args, **kwargs):
+        called["bigquery"] = True
+        return _fake_execution_result()
+
+    monkeypatch.setattr("app.services.query_execution_service.execute_query", fake_execute)
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers)
+
+    assert response.status_code == 409
+    assert "execution-time validation" in response.json()["detail"]
+    assert called["bigquery"] is False
+
+
+def test_execute_rejects_raw_sql_body(client):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-rawsql@example.com")
+
+    response = client.post(
+        f"/queries/{query_request_id}/execute",
+        headers=headers,
+        json={"sql": "SELECT secret FROM `other.table`", "row_limit": 1},
+    )
+
+    assert response.status_code == 422
+
+
+def test_successful_execution_stores_metadata_bounded_rows_and_json_safe_values(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-success@example.com")
+    observed = {}
+
+    def fake_execute(sql, maximum_bytes_billed, row_limit, timeout_seconds):
+        observed.update(
+            {
+                "sql": sql,
+                "maximum_bytes_billed": maximum_bytes_billed,
+                "row_limit": row_limit,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return _fake_execution_result(
+            rows=[
+                {"region": "South", "total_sales": Decimal("1849.25"), "day": date(2026, 7, 10), "nested": {"count": Decimal("2")}},
+                {"region": "East", "total_sales": Decimal("1300.50"), "day": datetime(2026, 7, 10, 12, 0, 0), "nested": [Decimal("3")]},
+            ],
+            truncated=True,
+        )
+
+    monkeypatch.setattr("app.services.query_execution_service.execute_query", fake_execute)
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers, json={"row_limit": 2})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert observed["sql"].startswith("SELECT")
+    assert observed["maximum_bytes_billed"] == 100_000_000
+    assert observed["row_limit"] == 2
+    assert observed["timeout_seconds"] == 30
+    assert payload["execution_status"] == "succeeded"
+    assert payload["execution_job_id"] == "exec_job_1"
+    assert payload["execution_bytes_processed"] == 1_048_576
+    assert payload["execution_bytes_billed"] == 1_048_576
+    assert payload["execution_cache_hit"] is False
+    assert payload["result_row_count"] == 2
+    assert payload["result_truncated"] is True
+    assert payload["result_rows"][0]["total_sales"] == "1849.25"
+    assert payload["result_rows"][0]["day"] == "2026-07-10"
+    assert payload["result_rows"][0]["nested"]["count"] == "2"
+    stored = _stored_query_request(query_request_id)
+    assert stored.execution_status == "succeeded"
+    assert stored.result_row_count == 2
+
+
+def test_requested_row_limit_cannot_exceed_server_max(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-rowlimit@example.com")
+    monkeypatch.setattr("app.services.query_execution_service.settings.QUERY_RESULT_ROW_LIMIT", 5)
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers, json={"row_limit": 6})
+
+    assert response.status_code == 400
+    assert "row limit" in response.json()["detail"]
+
+
+def test_bigquery_failure_sets_failed_status_and_sanitized_error(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-failed@example.com")
+    BadRequest = type("BadRequest", (Exception,), {})
+
+    def fail_execute(*args, **kwargs):
+        raise BadRequest("Exceeded maximum bytes billed with credential path C:/secret/key.json")
+
+    monkeypatch.setattr("app.services.query_execution_service.execute_query", fail_execute)
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["execution_status"] == "failed"
+    assert payload["execution_error"] == "The query exceeded the configured maximum bytes billed."
+    assert "key.json" not in payload["execution_error"]
+
+
+def test_timeout_sets_timed_out_status(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-timeout@example.com")
+
+    def timeout_execute(*args, **kwargs):
+        raise BigQueryExecutionTimeout("timeout", job_id="timeout_job")
+
+    monkeypatch.setattr("app.services.query_execution_service.execute_query", timeout_execute)
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["execution_status"] == "timed_out"
+    assert payload["execution_job_id"] == "timeout_job"
+    assert payload["execution_error"] == "The query timed out before completion."
+
+
+def test_internal_credential_error_sets_error_status(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-error@example.com")
+    DefaultCredentialsError = type("DefaultCredentialsError", (Exception,), {})
+
+    def credential_error(*args, **kwargs):
+        raise DefaultCredentialsError("service account path C:/secret/key.json")
+
+    monkeypatch.setattr("app.services.query_execution_service.execute_query", credential_error)
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["execution_status"] == "error"
+    assert payload["execution_error"] == "Google Cloud credentials are not configured correctly."
+
+
+def test_stored_execution_endpoint_enforces_ownership(monkeypatch, client):
+    owner_headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-get-owner@example.com")
+    other_headers, _other_id = _auth_headers(client, "execute-get-other@example.com")
+    monkeypatch.setattr("app.services.query_execution_service.execute_query", lambda *args, **kwargs: _fake_execution_result())
+    assert client.post(f"/queries/{query_request_id}/execute", headers=owner_headers).status_code == 200
+
+    response = client.get(f"/queries/{query_request_id}/execution", headers=other_headers)
+
+    assert response.status_code == 404
+
+
+def test_get_execution_before_run_returns_400(client):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-before-get@example.com")
+
+    response = client.get(f"/queries/{query_request_id}/execution", headers=headers)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Query has not been executed"
+
+
+def test_stored_execution_returns_bounded_rows(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-get@example.com")
+    monkeypatch.setattr("app.services.query_execution_service.execute_query", lambda *args, **kwargs: _fake_execution_result())
+    assert client.post(f"/queries/{query_request_id}/execute", headers=headers).status_code == 200
+
+    response = client.get(f"/queries/{query_request_id}/execution", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["execution_status"] == "succeeded"
+    assert payload["result_rows"] == [{"region": "South", "total_sales": "1849.25"}]
+
+
+
+
+
+def _set_query_history_state(query_request_id, **values):
+    db = database.SessionLocal()
+    try:
+        query_request = db.query(QueryRequest).filter(QueryRequest.id == query_request_id).first()
+        for key, value in values.items():
+            setattr(query_request, key, value)
+        db.commit()
+    finally:
+        db.close()
+
+
+def _create_history_query(user_id, dataset_id, *, question="Total sales by region?", sql=None, created_at=None, **state):
+    query_request_id = _create_query_request_record(
+        user_id,
+        dataset_id,
+        sql=sql or "SELECT region FROM `test-project.queryshield_demo.dataset_1_sales` LIMIT 10",
+    )
+    defaults = {
+        "validation_status": "passed",
+        "is_safe": True,
+        "dry_run_status": "passed",
+        "dry_run_valid": True,
+        "estimated_bytes_processed": 1_048_576,
+        "maximum_bytes_billed": 100_000_000,
+        "estimated_cost": Decimal("0.000006"),
+        "estimated_cost_currency": "USD",
+        "bytes_limit_exceeded": False,
+        "execution_eligible": True,
+        "execution_status": "succeeded",
+        "result_row_count": 1,
+        "result_columns": [{"name": "region", "field_type": "STRING", "mode": "NULLABLE"}],
+        "result_rows": [{"region": "South"}],
+        "result_truncated": False,
+    }
+    defaults.update(state)
+    if created_at is not None:
+        defaults["created_at"] = created_at
+    db = database.SessionLocal()
+    try:
+        query_request = db.query(QueryRequest).filter(QueryRequest.id == query_request_id).first()
+        query_request.natural_language_question = question
+        for key, value in defaults.items():
+            setattr(query_request, key, value)
+        db.commit()
+    finally:
+        db.close()
+    return query_request_id
+
+
+def _add_audit(user_id, action, *, resource_type="query_request", resource_id="1", details=None, created_at=None):
+    db = database.SessionLocal()
+    try:
+        audit_log = AuditLog(
+            user_id=user_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=str(resource_id),
+            details=details or {},
+        )
+        if created_at is not None:
+            audit_log.created_at = created_at
+        db.add(audit_log)
+        db.commit()
+        return audit_log.id
+    finally:
+        db.close()
+
+
+def test_unauthenticated_user_cannot_access_query_history(client):
+    response = client.get("/queries")
+
+    assert response.status_code == 401
+
+
+def test_query_history_filters_paginates_and_excludes_rows(client):
+    headers, user_id = _auth_headers(client, "history-owner@example.com")
+    other_headers, other_id = _auth_headers(client, "history-other@example.com")
+    dataset_id = _create_dataset_record(user_id)
+    other_dataset_id = _create_dataset_record(other_id, table_id="test-project.queryshield_demo.other_history")
+    older = datetime(2026, 7, 9, 12, 0, 0)
+    newer = datetime(2026, 7, 10, 12, 0, 0)
+    first_id = _create_history_query(user_id, dataset_id, question="Total sales by region", created_at=older, execution_status="failed")
+    second_id = _create_history_query(user_id, dataset_id, question="Average sales by market", created_at=newer, execution_status="succeeded")
+    _create_history_query(other_id, other_dataset_id, question="Other user query")
+
+    response = client.get("/queries?limit=1", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 2
+    assert payload["has_more"] is True
+    assert payload["items"][0]["id"] == second_id
+    assert "result_rows" not in payload["items"][0]
+    assert payload["items"][0]["generated_sql_preview"].startswith("SELECT")
+
+    response = client.get("/queries?skip=1&limit=1", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["items"][0]["id"] == first_id
+
+    filters = [
+        "dataset_id=" + str(dataset_id),
+        "generation_status=generated",
+        "validation_status=passed",
+        "dry_run_status=passed",
+        "execution_status=succeeded",
+        "is_safe=true",
+        "execution_eligible=true",
+        "search=Average",
+        "created_from=2026-07-10T00:00:00",
+        "created_to=2026-07-10T23:59:59",
+    ]
+    response = client.get("/queries?" + "&".join(filters), headers=headers)
+    assert response.status_code == 200
+    filtered = response.json()
+    assert filtered["total"] == 1
+    assert filtered["items"][0]["id"] == second_id
+
+    assert client.get("/queries?execution_status=unknown", headers=headers).status_code == 400
+    capped = client.get("/queries?limit=500", headers=headers)
+    assert capped.status_code == 200
+    assert capped.json()["limit"] == 100
+
+
+def test_query_lifecycle_returns_full_owned_read_only_record(monkeypatch, client):
+    headers, user_id = _auth_headers(client, "history-detail@example.com")
+    dataset_id = _create_dataset_record(user_id)
+    query_request_id = _create_history_query(user_id, dataset_id)
+    _add_audit(user_id, "query.execution_succeeded", resource_id=query_request_id, details={"result_row_count": 1})
+
+    def fail_if_execution_called(*args, **kwargs):
+        raise AssertionError("History detail must not execute queries")
+
+    monkeypatch.setattr("app.services.query_execution_service.execute_query", fail_if_execution_called)
+    response = client.get(f"/queries/{query_request_id}", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["query"]["id"] == query_request_id
+    assert payload["query"]["dataset_name"] == "Sales Data"
+    assert payload["generation"]["generated_sql"].startswith("SELECT")
+    assert payload["validation"]["status"] == "passed"
+    assert payload["dry_run"]["estimated_bytes_processed"] == 1_048_576
+    assert payload["execution"]["status"] == "succeeded"
+    assert payload["execution"]["result_rows"] == [{"region": "South"}]
+    assert payload["audit_summary"]["total_events"] == 1
+
+
+def test_query_lifecycle_enforces_ownership(client):
+    _owner_headers, owner_id = _auth_headers(client, "history-detail-owner@example.com")
+    other_headers, _other_id = _auth_headers(client, "history-detail-other@example.com")
+    dataset_id = _create_dataset_record(owner_id)
+    query_request_id = _create_history_query(owner_id, dataset_id)
+
+    response = client.get(f"/queries/{query_request_id}", headers=other_headers)
+
+    assert response.status_code == 404
+
+
+def test_audit_list_enforces_ownership_and_filters(client):
+    headers, user_id = _auth_headers(client, "audit-owner@example.com")
+    _other_headers, other_id = _auth_headers(client, "audit-other@example.com")
+    _add_audit(user_id, "query.execution_succeeded", resource_id="12", details={"result_row_count": 4}, created_at=datetime(2026, 7, 10, 12, 0, 0))
+    _add_audit(user_id, "query.validation_failed", resource_id="13", details={"error_count": 1}, created_at=datetime(2026, 7, 10, 11, 0, 0))
+    _add_audit(other_id, "query.execution_succeeded", resource_id="99", details={"result_row_count": 1})
+
+    response = client.get("/audit-logs?action=query.execution_succeeded&resource_type=query_request&resource_id=12", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["items"][0]["resource_id"] == "12"
+    assert payload["items"][0]["details"] == {"result_row_count": 4}
+
+    asc_response = client.get("/audit-logs?sort_order=asc", headers=headers)
+    assert asc_response.status_code == 200
+    actions = [item["action"] for item in asc_response.json()["items"]]
+    assert "query.validation_failed" in actions
+    assert "query.execution_succeeded" in actions
+    assert all(item["resource_id"] != "99" for item in asc_response.json()["items"])
+
+    assert client.get("/audit-logs?limit=500", headers=headers).json()["limit"] == 100
+    assert client.get("/audit-logs?sort_order=sideways", headers=headers).status_code == 400
+
+
+def test_query_audit_timeline_enforces_ownership_and_chronological_order(client):
+    owner_headers, owner_id = _auth_headers(client, "audit-query-owner@example.com")
+    other_headers, _other_id = _auth_headers(client, "audit-query-other@example.com")
+    dataset_id = _create_dataset_record(owner_id)
+    query_request_id = _create_history_query(owner_id, dataset_id)
+    _add_audit(owner_id, "query.execution_succeeded", resource_id=query_request_id, created_at=datetime(2026, 7, 10, 12, 0, 2))
+    _add_audit(owner_id, "query.execution_started", resource_id=query_request_id, created_at=datetime(2026, 7, 10, 12, 0, 1))
+
+    response = client.get(f"/queries/{query_request_id}/audit-logs", headers=owner_headers)
+    assert response.status_code == 200
+    actions = [item["action"] for item in response.json()["items"]]
+    assert actions == ["query.execution_started", "query.execution_succeeded"]
+
+    forbidden = client.get(f"/queries/{query_request_id}/audit-logs", headers=other_headers)
+    assert forbidden.status_code == 404
+
+
+def test_audit_service_sanitizes_sensitive_details(client):
+    from app.services.audit_service import create_audit_log
+
+    headers, user_id = _auth_headers(client, "audit-sanitize@example.com")
+    db = database.SessionLocal()
+    try:
+        create_audit_log(
+            db,
+            user_id,
+            "query.execution_failed",
+            "query_request",
+            "123",
+            {
+                "password": "password123",
+                "jwt_token": "secret-token",
+                "GEMINI_API_KEY": "secret-key",
+                "safe_status": "failed",
+                "nested": {"credentials_path": "C:/secret/key.json", "count": 1},
+            },
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get("/audit-logs?action=query.execution_failed", headers=headers)
+
+    assert response.status_code == 200
+    details = response.json()["items"][0]["details"]
+    assert details == {"safe_status": "failed", "nested": {"count": 1}}
+    assert "password123" not in response.text
+    assert "secret-token" not in response.text
+    assert "secret-key" not in response.text

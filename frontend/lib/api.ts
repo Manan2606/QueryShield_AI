@@ -1,4 +1,5 @@
 import type {
+  AuditLogListResponse,
   AuthToken,
   BigQueryLoadResponse,
   BigQueryTableInfo,
@@ -7,7 +8,10 @@ import type {
   Dataset,
   DatasetDetail,
   QueryDryRunResponse,
+  QueryExecutionResponse,
   QueryGenerateResponse,
+  QueryHistoryListResponse,
+  QueryLifecycleResponse,
   QueryRequestSummary,
   SQLValidationResponse,
   User,
@@ -179,7 +183,7 @@ export function generateSql(token: string, payload: { dataset_id: number; questi
 
 export function listQueryRequests(token: string, datasetId?: number) {
   const query = datasetId ? `?dataset_id=${datasetId}` : "";
-  return apiRequest<QueryRequestSummary[]>(`/queries${query}`, { token });
+  return apiRequest<QueryHistoryListResponse>(`/queries${query}`, { token });
 }
 
 
@@ -197,4 +201,52 @@ export function runCostDryRun(token: string, queryRequestId: number) {
 
 export function getCostDryRun(token: string, queryRequestId: number) {
   return apiRequest<QueryDryRunResponse>(`/queries/${queryRequestId}/dry-run`, { token });
+}
+
+export function executeQuery(token: string, queryRequestId: number, payload?: { row_limit?: number }) {
+  return apiRequest<QueryExecutionResponse>(`/queries/${queryRequestId}/execute`, { method: "POST", token, body: payload });
+}
+
+export function getQueryExecution(token: string, queryRequestId: number) {
+  return apiRequest<QueryExecutionResponse>(`/queries/${queryRequestId}/execution`, { token });
+}
+
+
+
+export type QueryHistoryFilters = {
+  skip?: number;
+  limit?: number;
+  dataset_id?: number | null;
+  generation_status?: string;
+  validation_status?: string;
+  dry_run_status?: string;
+  execution_status?: string;
+  search?: string;
+};
+
+function buildQuery(params: Record<string, string | number | boolean | null | undefined>) {
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") {
+      searchParams.set(key, String(value));
+    }
+  }
+  const query = searchParams.toString();
+  return query ? `?${query}` : "";
+}
+
+export function listQueryHistory(token: string, filters: QueryHistoryFilters = {}) {
+  return apiRequest<QueryHistoryListResponse>(`/queries${buildQuery(filters)}`, { token });
+}
+
+export function getQueryLifecycle(token: string, queryRequestId: number) {
+  return apiRequest<QueryLifecycleResponse>(`/queries/${queryRequestId}`, { token });
+}
+
+export function listAuditLogs(token: string, filters: Record<string, string | number | boolean | null | undefined> = {}) {
+  return apiRequest<AuditLogListResponse>(`/audit-logs${buildQuery(filters)}`, { token });
+}
+
+export function getQueryAuditLogs(token: string, queryRequestId: number) {
+  return apiRequest<AuditLogListResponse>(`/queries/${queryRequestId}/audit-logs`, { token });
 }

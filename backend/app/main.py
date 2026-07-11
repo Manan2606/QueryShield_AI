@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-
+from app.routers.audit_logs import router as audit_logs_router
 from app.routers.auth import router as auth_router
 from app.routers.datasets import router as datasets_router
 from app.routers.health import router as health_router
@@ -27,6 +27,7 @@ if settings.frontend_origins_list:
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(users_router)
+app.include_router(audit_logs_router)
 app.include_router(datasets_router)
 app.include_router(queries_router)
 

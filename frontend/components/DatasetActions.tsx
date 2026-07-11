@@ -65,9 +65,10 @@ export default function DatasetActions({
   async function submitUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (file) {
+      const form = event.currentTarget;
       await onUploadCsv(file);
       setFile(null);
-      event.currentTarget.reset();
+      form?.reset();
     }
   }
 
