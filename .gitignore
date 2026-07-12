@@ -1,4 +1,4 @@
-﻿# Python caches and bytecode
+# Python caches and bytecode
 __pycache__/
 *.py[cod]
 *.pyo
@@ -32,7 +32,10 @@ ENV/
 *.pfx
 *service-account*.json
 *credentials*.json
-
+credentials/*.json
+backend/credentials/*.json
+frontend/credentials/*.json
+service-account*.json
 # Local databases
 *.db
 *.sqlite
