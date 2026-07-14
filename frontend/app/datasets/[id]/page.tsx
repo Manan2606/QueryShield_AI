@@ -88,7 +88,7 @@ function DatasetDetailContent({ token, datasetId }: { token: string; datasetId: 
     try {
       await api.uploadCsv(token, datasetId, file);
       setFile(null);
-      setNotice("CSV uploaded and schema detected.");
+      setNotice("CSV uploaded. Review the detected columns below.");
       await load(true);
     } catch (err) {
       setError(err instanceof api.ApiError ? err.message : "CSV upload failed.");
@@ -103,7 +103,7 @@ function DatasetDetailContent({ token, datasetId }: { token: string; datasetId: 
     setNotice(null);
     try {
       await api.loadBigQuery(token, datasetId);
-      setNotice("Dataset loaded to BigQuery.");
+      setNotice("Dataset prepared for analysis.");
       await load(true);
     } catch (err) {
       setError(err instanceof api.ApiError ? err.message : "BigQuery load failed.");
@@ -127,7 +127,7 @@ function DatasetDetailContent({ token, datasetId }: { token: string; datasetId: 
           <div className="mt-2 flex flex-wrap items-center gap-3"><h2 className="text-xl font-bold text-slate-950">{dataset.name}</h2><StatusBadge status={dataset.status} /></div>
           <p className="mt-1 text-sm text-slate-600">Created {formatDate(dataset.created_at)} - Updated {formatDate(dataset.updated_at)}</p>
         </div>
-        {dataset.status === "loaded" ? <Link className="btn-primary" href={`/queries/new?dataset_id=${dataset.id}`}>Ask question</Link> : null}
+        {dataset.status === "loaded" ? <Link className="btn-primary" href={`/queries/new?dataset_id=${dataset.id}`}>Ask a question</Link> : null}
       </div>
 
       <ErrorAlert message={error} />
@@ -155,14 +155,14 @@ function DatasetDetailContent({ token, datasetId }: { token: string; datasetId: 
             <button className="btn-primary" disabled={!file || loading === "upload"} type="submit">{loading === "upload" ? "Uploading..." : "Upload"}</button>
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-3">
-            <button className="btn-warning" disabled={!dataset.storage_path || loading === "bigquery"} onClick={loadToBigQuery} type="button">{loading === "bigquery" ? "Loading..." : "Load to BigQuery"}</button>
+            <button className="btn-warning" disabled={!dataset.storage_path || loading === "bigquery"} onClick={loadToBigQuery} type="button">{loading === "bigquery" ? "Loading..." : "Prepare for analysis"}</button>
             {dataset.bigquery_table_id ? <span className="break-all text-sm font-semibold text-slate-700">{dataset.bigquery_table_id}</span> : <span className="text-sm text-slate-600">Upload a CSV before loading to BigQuery.</span>}
           </div>
         </form>
       </section>
 
       <section className="app-surface p-4">
-        <h3 className="text-base font-bold text-slate-950">Detected schema</h3>
+        <h3 className="text-base font-bold text-slate-950">Review columns</h3>
         <div className="mt-4 table-shell">
           <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr><th className="px-3 py-2">Position</th><th className="px-3 py-2">Name</th><th className="px-3 py-2">Type</th><th className="px-3 py-2">Nullable</th><th className="px-3 py-2">Sample values</th></tr></thead>
@@ -179,7 +179,7 @@ function DatasetDetailContent({ token, datasetId }: { token: string; datasetId: 
         {previewHeaders.length ? <div className="mt-4 table-shell"><table className="min-w-full divide-y divide-slate-200 text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{previewHeaders.map((header) => <th className="px-3 py-2" key={header}>{header}</th>)}</tr></thead><tbody className="divide-y divide-slate-100 text-slate-700">{preview?.rows.map((row, index) => <tr key={index}>{previewHeaders.map((header) => <td className="max-w-sm whitespace-pre-wrap px-3 py-2 align-top" key={header}>{displayCell(row[header])}</td>)}</tr>)}</tbody></table></div> : <EmptyState title="No CSV preview available" />}
       </section>
 
-      {bigQueryInfo ? <section className="app-surface p-4"><h3 className="text-base font-bold text-slate-950">BigQuery table</h3><dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3"><div><dt className="font-semibold text-slate-900">Table</dt><dd className="break-all text-slate-600">{bigQueryInfo.bigquery_table_id}</dd></div><div><dt className="font-semibold text-slate-900">Rows</dt><dd className="text-slate-600">{formatNumber(bigQueryInfo.num_rows)}</dd></div><div><dt className="font-semibold text-slate-900">Bytes</dt><dd className="text-slate-600">{formatNumber(bigQueryInfo.num_bytes)}</dd></div></dl></section> : null}
+      {bigQueryInfo ? <section className="app-surface p-4"><h3 className="text-base font-bold text-slate-950">Technical preparation details</h3><dl className="mt-3 grid gap-3 text-sm sm:grid-cols-3"><div><dt className="font-semibold text-slate-900">Table</dt><dd className="break-all text-slate-600">{bigQueryInfo.bigquery_table_id}</dd></div><div><dt className="font-semibold text-slate-900">Rows</dt><dd className="text-slate-600">{formatNumber(bigQueryInfo.num_rows)}</dd></div><div><dt className="font-semibold text-slate-900">Bytes</dt><dd className="text-slate-600">{formatNumber(bigQueryInfo.num_bytes)}</dd></div></dl></section> : null}
     </div>
   );
 }

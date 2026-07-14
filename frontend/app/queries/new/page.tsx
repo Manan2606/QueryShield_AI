@@ -1,28 +1,51 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import AiSummaryCard from "@/components/analysis/AiSummaryCard";
+import AnalysisErrorState from "@/components/analysis/AnalysisErrorState";
+import AnalysisProgress, { type AnalysisStage } from "@/components/analysis/AnalysisProgress";
+import AnalysisResultHeader from "@/components/analysis/AnalysisResultHeader";
+import DatasetSelector from "@/components/analysis/DatasetSelector";
+import GovernanceDetails from "@/components/analysis/GovernanceDetails";
+import QuestionComposer from "@/components/analysis/QuestionComposer";
+import ResultChart from "@/components/analysis/ResultChart";
 import AppShell from "@/components/mvp/AppShell";
 import EmptyState from "@/components/mvp/EmptyState";
-import ErrorAlert from "@/components/mvp/ErrorAlert";
-import QueryPipeline from "@/components/mvp/QueryPipeline";
 import ResultTable from "@/components/mvp/ResultTable";
 import StatusBadge from "@/components/mvp/StatusBadge";
-import { formatDate, formatNumber } from "@/components/mvp/format";
 import * as api from "@/lib/api";
-import type { Dataset, QueryDryRunResponse, QueryExecutionResponse, QueryGenerateResponse, SQLValidationResponse } from "@/lib/types";
+import type { AuditLog, Dataset, QueryDryRunResponse, QueryExecutionResponse, QueryGenerateResponse, SQLValidationResponse } from "@/lib/types";
 
 export default function NewQueryPage() {
   return (
-    <AppShell title="Ask Query">
+    <AppShell title="Analysis">
       {({ token }) => (
-        <Suspense fallback={<div className="app-surface p-4 text-sm text-slate-600">Loading query workspace...</div>}>
+        <Suspense fallback={<div className="app-surface p-4 text-sm text-slate-600">Loading analysis workspace...</div>}>
           <NewQueryContent token={token} />
         </Suspense>
       )}
     </AppShell>
   );
+}
+
+function friendlyApiError(err: unknown, fallback: string): string {
+  return err instanceof api.ApiError ? err.message : fallback;
+}
+
+function validationFailureMessage(validation: SQLValidationResponse): string {
+  if (validation.errors.length) return validation.errors[0];
+  if (validation.validation_status !== "passed") return "The generated query did not pass validation.";
+  return "The generated query was not marked safe.";
+}
+
+function dryRunFailureMessage(dryRun: QueryDryRunResponse): string {
+  if (dryRun.bytes_limit_exceeded) return "This analysis would process more data than the allowed limit.";
+  if (dryRun.dry_run_error) return dryRun.dry_run_error;
+  if (!dryRun.dry_run_valid) return "We couldn't estimate this query safely, so it was not executed.";
+  if (!dryRun.execution_eligible) return "The backend did not mark this analysis as eligible for execution.";
+  return "We couldn't estimate this query safely, so it was not executed.";
 }
 
 function NewQueryContent({ token }: { token: string }) {
@@ -34,127 +57,217 @@ function NewQueryContent({ token }: { token: string }) {
   const [validation, setValidation] = useState<SQLValidationResponse | null>(null);
   const [dryRun, setDryRun] = useState<QueryDryRunResponse | null>(null);
   const [execution, setExecution] = useState<QueryExecutionResponse | null>(null);
-  const [loading, setLoading] = useState<string | null>("datasets");
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [stage, setStage] = useState<AnalysisStage>("idle");
+  const [loadingDatasets, setLoadingDatasets] = useState(true);
+  const [errorTitle, setErrorTitle] = useState("Analysis could not be completed");
   const [error, setError] = useState<string | null>(null);
+  const [costBlocked, setCostBlocked] = useState(false);
 
   useEffect(() => {
     let mounted = true;
-    async function load() {
-      setLoading("datasets");
+    async function loadDatasets() {
+      setLoadingDatasets(true);
       setError(null);
       try {
         const data = await api.listDatasets(token);
         if (!mounted) return;
         setDatasets(data);
       } catch (err) {
-        if (mounted) setError(err instanceof api.ApiError ? err.message : "Datasets failed to load.");
+        if (mounted) {
+          setErrorTitle("Datasets could not be loaded");
+          setError(friendlyApiError(err, "Datasets failed to load."));
+          setStage("failed");
+        }
       } finally {
-        if (mounted) setLoading(null);
+        if (mounted) setLoadingDatasets(false);
       }
     }
-    void load();
+    void loadDatasets();
     return () => { mounted = false; };
   }, [token]);
 
+  const selectedDataset = useMemo(() => datasets.find((dataset) => String(dataset.id) === datasetId) || null, [datasets, datasetId]);
   const loadedDatasets = useMemo(() => datasets.filter((dataset) => dataset.status === "loaded"), [datasets]);
-  const selectedDataset = datasets.find((dataset) => String(dataset.id) === datasetId) || null;
+  const running = ["generating", "validating", "estimating", "executing", "summarizing"].includes(stage);
   const queryId = generated?.id || validation?.query_request_id || dryRun?.query_request_id || execution?.query_request_id || null;
-  const canValidate = Boolean(queryId && generated?.generated_sql && !validation);
-  const canDryRun = Boolean(queryId && validation?.is_safe && validation.validation_status === "passed" && !dryRun);
-  const canExecute = Boolean(queryId && dryRun?.execution_eligible && dryRun.dry_run_status === "passed" && !execution);
+  const canAnalyze = Boolean(selectedDataset?.status === "loaded" && question.trim() && !running);
 
-  function resetPipeline() {
+  function resetAnalysis() {
     setGenerated(null);
     setValidation(null);
     setDryRun(null);
     setExecution(null);
+    setAuditLogs([]);
+    setStage("idle");
+    setError(null);
+    setCostBlocked(false);
   }
 
-  async function generate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLoading("generate");
-    setError(null);
-    resetPipeline();
-    try {
-      setGenerated(await api.generateSql(token, { dataset_id: Number(datasetId), question }));
-    } catch (err) {
-      setError(err instanceof api.ApiError ? err.message : "SQL generation failed.");
-    } finally {
-      setLoading(null);
+  function handleDatasetChange(nextDatasetId: string) {
+    setDatasetId(nextDatasetId);
+    resetAnalysis();
+  }
+
+  function handleQuestionChange(nextQuestion: string) {
+    setQuestion(nextQuestion);
+    if (generated || validation || dryRun || execution || error) {
+      resetAnalysis();
     }
   }
 
-  async function validate() {
-    if (!queryId) return;
-    setLoading("validate");
-    setError(null);
+  async function loadAuditLogs(nextQueryId: number) {
     try {
-      setValidation(await api.validateSql(token, queryId));
-    } catch (err) {
-      setError(err instanceof api.ApiError ? err.message : "SQL validation failed.");
-    } finally {
-      setLoading(null);
+      const response = await api.getQueryAuditLogs(token, nextQueryId);
+      setAuditLogs(response.items);
+    } catch {
+      setAuditLogs([]);
     }
   }
 
-  async function dryRunQuery() {
-    if (!queryId) return;
-    setLoading("dry-run");
-    setError(null);
-    try {
-      setDryRun(await api.runCostDryRun(token, queryId));
-    } catch (err) {
-      setError(err instanceof api.ApiError ? err.message : "Dry run failed.");
-    } finally {
-      setLoading(null);
-    }
-  }
+  async function analyze() {
+    if (!selectedDataset || selectedDataset.status !== "loaded" || !question.trim()) return;
 
-  async function execute() {
-    if (!queryId || !window.confirm("Execute this validated, dry-run-approved query with bounded results?")) return;
-    setLoading("execute");
+    setGenerated(null);
+    setValidation(null);
+    setDryRun(null);
+    setExecution(null);
+    setAuditLogs([]);
     setError(null);
-    try {
-      setExecution(await api.executeQuery(token, queryId, { row_limit: 100 }));
-    } catch (err) {
-      setError(err instanceof api.ApiError ? err.message : "Query execution failed.");
-    } finally {
-      setLoading(null);
-    }
-  }
+    setErrorTitle("Analysis could not be completed");
+    setCostBlocked(false);
 
-  const statuses = [generated?.status, validation?.validation_status, dryRun?.dry_run_status, execution?.execution_status].map((status) => status || "waiting");
+    let nextGenerated: QueryGenerateResponse | null = null;
+    try {
+      setStage("generating");
+      nextGenerated = await api.generateSql(token, { dataset_id: selectedDataset.id, question: question.trim() });
+      setGenerated(nextGenerated);
+    } catch (err) {
+      setStage("failed");
+      setErrorTitle("We couldn't generate a query from that question.");
+      setError(friendlyApiError(err, "Try making the question more specific."));
+      return;
+    }
+
+    try {
+      setStage("validating");
+      const nextValidation = await api.validateSql(token, nextGenerated.id);
+      setValidation(nextValidation);
+      if (nextValidation.validation_status !== "passed" || nextValidation.is_safe !== true) {
+        setStage("blocked");
+        setErrorTitle("This query was blocked by QueryShield's safety rules.");
+        setError(validationFailureMessage(nextValidation));
+        await loadAuditLogs(nextGenerated.id);
+        return;
+      }
+    } catch (err) {
+      setStage("failed");
+      setErrorTitle("This query was blocked by QueryShield's safety rules.");
+      setError(friendlyApiError(err, "Validation could not be completed."));
+      await loadAuditLogs(nextGenerated.id);
+      return;
+    }
+
+    let nextDryRun: QueryDryRunResponse;
+    try {
+      setStage("estimating");
+      nextDryRun = await api.runCostDryRun(token, nextGenerated.id);
+      setDryRun(nextDryRun);
+      if (nextDryRun.dry_run_status !== "passed" || !nextDryRun.dry_run_valid || !nextDryRun.execution_eligible || nextDryRun.bytes_limit_exceeded) {
+        setStage("blocked");
+        setCostBlocked(nextDryRun.bytes_limit_exceeded);
+        setErrorTitle(nextDryRun.bytes_limit_exceeded ? "This analysis would process more data than the allowed limit." : "We couldn't estimate this query safely, so it was not executed.");
+        setError(dryRunFailureMessage(nextDryRun));
+        await loadAuditLogs(nextGenerated.id);
+        return;
+      }
+    } catch (err) {
+      setStage("failed");
+      setErrorTitle("We couldn't estimate this query safely, so it was not executed.");
+      setError(friendlyApiError(err, "Dry run failed before execution."));
+      await loadAuditLogs(nextGenerated.id);
+      return;
+    }
+
+    try {
+      setStage("executing");
+      const nextExecution = await api.executeQuery(token, nextGenerated.id, { row_limit: 100 });
+      setExecution(nextExecution);
+      if (nextExecution.execution_status !== "succeeded") {
+        setStage("failed");
+        setErrorTitle("The query passed its checks but could not be completed.");
+        setError(nextExecution.execution_error || "Execution did not complete successfully.");
+        await loadAuditLogs(nextGenerated.id);
+        return;
+      }
+    } catch (err) {
+      setStage("failed");
+      setErrorTitle("The query passed its checks but could not be completed.");
+      setError(friendlyApiError(err, "Execution failed."));
+      await loadAuditLogs(nextGenerated.id);
+      return;
+    }
+
+    setStage("summarizing");
+    await loadAuditLogs(nextGenerated.id);
+    setStage("complete");
+  }
 
   return (
     <div className="space-y-6">
-      <ErrorAlert message={error} />
-      <QueryPipeline statuses={statuses} />
-
-      <section className="app-surface p-4">
-        <h2 className="text-base font-bold text-slate-950">Question</h2>
-        <form className="mt-4 space-y-4" onSubmit={generate}>
-          <label className="field-label">Loaded dataset
-            <select className="input-field" required value={datasetId} onChange={(event) => { setDatasetId(event.target.value); resetPipeline(); }}>
-              <option value="">Select a loaded dataset</option>
-              {loadedDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.name}</option>)}
-            </select>
-          </label>
-          {selectedDataset ? <p className="text-sm text-slate-600">{selectedDataset.bigquery_table_id || "No BigQuery table recorded"} - {formatNumber(selectedDataset.row_count)} rows</p> : null}
-          {!loadedDatasets.length && loading !== "datasets" ? <EmptyState title="Load a CSV dataset to BigQuery before asking questions" action={<Link className="btn-primary" href="/datasets">Open datasets</Link>} /> : null}
-          <label className="field-label">Natural language question
-            <textarea className="input-field min-h-28" required value={question} onChange={(event) => { setQuestion(event.target.value); resetPipeline(); }} placeholder="Example: Show the top 10 customers by revenue" />
-          </label>
-          <button className="btn-primary" disabled={!datasetId || !question.trim() || loading === "generate"} type="submit">{loading === "generate" ? "Generating..." : "Generate SQL"}</button>
-        </form>
+      <section className="app-surface p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-2xl font-black text-slate-950">Ask a question. Get governed results.</h2>
+              {selectedDataset ? <StatusBadge status={selectedDataset.status === "loaded" ? "ready" : selectedDataset.status} /> : null}
+            </div>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+              QueryShield generates SQL, checks safety, estimates processing, and runs only approved analysis behind one Analyze button.
+            </p>
+          </div>
+          <Link className="btn-secondary" href="/history">View history</Link>
+        </div>
       </section>
 
-      {generated ? <section className="app-surface p-4"><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-base font-bold text-slate-950">Generated SQL</h2><StatusBadge status={generated.status} /></div><pre className="mt-4 max-h-80 overflow-auto rounded-md bg-slate-950 p-4 text-sm text-slate-100"><code>{generated.generated_sql}</code></pre><div className="mt-4 flex flex-wrap gap-3"><button className="btn-primary" disabled={!canValidate || loading === "validate"} onClick={validate} type="button">{loading === "validate" ? "Validating..." : "Validate"}</button>{queryId ? <Link className="btn-secondary" href={`/queries/${queryId}`}>Open detail</Link> : null}</div></section> : null}
+      <section className="grid gap-6 lg:grid-cols-[minmax(18rem,24rem)_1fr]">
+        <div className="app-surface p-4">
+          <DatasetSelector datasets={datasets} loading={loadingDatasets || running} onChange={handleDatasetChange} selectedDatasetId={datasetId} />
+        </div>
+        <div className="app-surface p-4">
+          <QuestionComposer disabled={!canAnalyze} onAnalyze={() => void analyze()} onChange={handleQuestionChange} question={question} running={running} />
+        </div>
+      </section>
 
-      {validation ? <section className="app-surface p-4"><div className="flex flex-wrap items-center gap-2"><h2 className="text-base font-bold text-slate-950">Validation</h2><StatusBadge status={validation.validation_status} /><StatusBadge status={validation.is_safe ? "safe" : "blocked"} /></div><dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3"><div><dt className="font-semibold text-slate-900">Statement</dt><dd>{validation.statement_type || "Not available"}</dd></div><div><dt className="font-semibold text-slate-900">Validated</dt><dd>{formatDate(validation.validated_at)}</dd></div><div><dt className="font-semibold text-slate-900">Referenced tables</dt><dd>{validation.referenced_tables.join(", ") || "None"}</dd></div></dl>{validation.errors.length ? <p className="mt-3 text-sm text-red-700">{validation.errors.join(", ")}</p> : null}{validation.warnings.length ? <p className="mt-3 text-sm text-amber-700">{validation.warnings.join(", ")}</p> : null}<button className="btn-primary mt-4" disabled={!canDryRun || loading === "dry-run"} onClick={dryRunQuery} type="button">{loading === "dry-run" ? "Checking cost..." : "Run dry run"}</button></section> : null}
+      {!datasets.length && !loadingDatasets ? <EmptyState title="Create and prepare a dataset before asking questions" action={<Link className="btn-primary" href="/datasets">Open datasets</Link>} /> : null}
+      {datasets.length > 0 && !loadedDatasets.length && !loadingDatasets ? <EmptyState title="Prepare a dataset for analysis" action={<Link className="btn-primary" href="/datasets">Review datasets</Link>} /> : null}
 
-      {dryRun ? <section className="app-surface p-4"><div className="flex flex-wrap items-center gap-2"><h2 className="text-base font-bold text-slate-950">Dry run</h2><StatusBadge status={dryRun.dry_run_status} /><StatusBadge status={dryRun.execution_eligible ? "eligible" : "blocked"} /></div><dl className="mt-4 grid gap-3 text-sm sm:grid-cols-4"><div><dt className="font-semibold text-slate-900">Estimated bytes</dt><dd>{formatNumber(dryRun.estimated_bytes_processed)}</dd></div><div><dt className="font-semibold text-slate-900">Maximum bytes</dt><dd>{formatNumber(dryRun.maximum_bytes_billed)}</dd></div><div><dt className="font-semibold text-slate-900">Checked</dt><dd>{formatDate(dryRun.dry_run_at)}</dd></div><div><dt className="font-semibold text-slate-900">Job</dt><dd className="break-all">{dryRun.dry_run_job_id || "Not available"}</dd></div></dl>{dryRun.dry_run_error ? <p className="mt-3 text-sm text-red-700">{dryRun.dry_run_error}</p> : null}<button className="btn-warning mt-4" disabled={!canExecute || loading === "execute"} onClick={execute} type="button">{loading === "execute" ? "Executing..." : "Execute bounded query"}</button></section> : null}
+      <AnalysisProgress stage={stage} />
+      <AnalysisErrorState
+        message={error}
+        onRetry={stage === "failed" && selectedDataset?.status === "loaded" ? () => void analyze() : undefined}
+        suggestions={costBlocked ? ["Add a date range.", "Ask for fewer columns.", "Narrow the category.", "Request a summary instead of individual rows."] : []}
+        title={errorTitle}
+      />
 
-      {execution ? <section className="app-surface p-4"><div className="flex flex-wrap items-center gap-2"><h2 className="text-base font-bold text-slate-950">Results</h2><StatusBadge status={execution.execution_status} />{execution.result_truncated ? <StatusBadge status="truncated" /> : null}</div><dl className="mt-4 grid gap-3 text-sm sm:grid-cols-4"><div><dt className="font-semibold text-slate-900">Rows</dt><dd>{formatNumber(execution.result_row_count)}</dd></div><div><dt className="font-semibold text-slate-900">Bytes processed</dt><dd>{formatNumber(execution.execution_bytes_processed)}</dd></div><div><dt className="font-semibold text-slate-900">Executed</dt><dd>{formatDate(execution.executed_at)}</dd></div><div><dt className="font-semibold text-slate-900">Job</dt><dd className="break-all">{execution.execution_job_id || "Not available"}</dd></div></dl>{execution.execution_error ? <p className="mt-3 text-sm text-red-700">{execution.execution_error}</p> : null}<div className="mt-4"><ResultTable columns={execution.result_columns} rows={execution.result_rows} /></div></section> : null}
+      {execution ? (
+        <div className="space-y-6">
+          <AnalysisResultHeader execution={execution} question={question} />
+          <AiSummaryCard />
+          <ResultChart execution={execution} />
+          <section className="app-surface p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-base font-bold text-slate-950">Result table</h3>
+              <span className="text-sm font-semibold text-slate-600">{execution.result_row_count.toLocaleString()} rows returned</span>
+            </div>
+            <div className="mt-4"><ResultTable columns={execution.result_columns} rows={execution.result_rows} /></div>
+          </section>
+        </div>
+      ) : null}
+
+      {(generated || validation || dryRun || execution) ? (
+        <GovernanceDetails auditLogs={auditLogs} dryRun={dryRun} execution={execution} generated={generated} queryId={queryId} validation={validation} />
+      ) : null}
     </div>
   );
 }

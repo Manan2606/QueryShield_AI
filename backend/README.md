@@ -176,6 +176,25 @@ QUERY_TIMEOUT_SECONDS=30
 
 Keep service account JSON files outside the repository or under ignored credential paths. Gemini and GCP secrets must remain backend-only.
 
+
+## Docker
+
+The backend image is built from `backend/Dockerfile` and starts FastAPI with:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+The image uses Python 3.11 slim, installs `requirements.txt`, runs as a non-root `queryshield` user, exposes port `8000`, and keeps `/app/storage/uploads` writable for uploaded CSV files.
+
+In Docker Compose, migrations run through a one-shot `migrate` service:
+
+```bash
+docker compose run --rm migrate
+```
+
+The default Compose backend connects to PostgreSQL with the internal hostname `postgres`; do not use `localhost` from inside containers. Backend health uses `GET /health`, and database readiness can be checked with `GET /health/db`.
+
 ## Security Notes
 
 - The browser is not trusted to provide SQL, table IDs, bytes limits, or safety approvals.

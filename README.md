@@ -191,6 +191,65 @@ npm run dev
 
 Frontend app: http://localhost:3000
 
+
+## Docker Compose
+
+Prerequisites:
+
+- Docker Desktop or Docker Engine
+- Docker Compose plugin
+
+Start the local production-style stack from the repository root:
+
+```bash
+docker compose up --build
+```
+
+Application URLs:
+
+- Frontend: http://localhost:3000
+- Backend: http://localhost:8000
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+
+Useful commands:
+
+```bash
+docker compose config
+docker compose build
+docker compose up --build
+docker compose ps
+docker compose logs -f backend
+docker compose logs -f frontend
+docker compose down
+```
+
+To remove containers and local named volumes:
+
+```bash
+docker compose down -v
+```
+
+`docker compose down -v` deletes the local PostgreSQL data volume and uploaded CSV storage volume.
+
+Compose uses local development defaults only. Do not reuse the included database password or JWT secret in production. Gemini and BigQuery credentials are not required for container startup, and service-account JSON files must not be baked into images.
+
+## Continuous Integration
+
+GitHub Actions CI is defined in `.github/workflows/ci.yml`. It runs on pull requests and pushes to `main` and `dev`.
+
+CI verifies:
+
+- backend dependency installation
+- Alembic migration compatibility
+- backend tests
+- frontend dependency installation from `package-lock.json`
+- frontend build
+- Docker image builds
+- Compose configuration validity
+
+The workflow does not deploy the application, push images, or require real Gemini or GCP credentials.
+
 ## Environment Variables
 
 Do not commit real `.env` files, API keys, database passwords, or service account JSON files.
@@ -261,16 +320,14 @@ QueryShield AI is an MVP with a defense-in-depth design, not a claim of perfect 
 ## Current Status
 
 - Phase-1 MVP complete
-- Dockerization pending
-- CI/CD pending
+- Dockerization added for local Compose usage
+- GitHub Actions CI added for tests, builds, Docker image builds, and Compose validation
 - GCP deployment pending
 - AI result summary pending
 - Charts pending
 
 ## Roadmap
 
-- Docker
-- GitHub Actions
 - GCP deployment
 - AI result summaries
 - Charts

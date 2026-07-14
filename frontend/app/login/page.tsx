@@ -45,11 +45,11 @@ function LoginContent() {
           </div>
           <p className="mt-8 inline-flex rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-teal-100 backdrop-blur">Secure analytics workspace</p>
           <h1 className="mt-4 text-4xl font-black tracking-normal sm:text-5xl">Governed analytics, from CSV to bounded BigQuery results.</h1>
-          <p className="mt-5 max-w-lg text-base leading-7 text-slate-200">Phase-1 workspace for dataset onboarding, SQL generation, validation, dry runs, execution, and audit review.</p>
+          <p className="mt-5 max-w-lg text-base leading-7 text-slate-200">Phase-1 workspace for dataset onboarding, governed analysis, bounded results, and audit review.</p>
           <div className="mt-8 grid gap-3 text-sm sm:grid-cols-3">
             {[
               "Upload CSV",
-              "Validate SQL",
+              "Ask questions",
               "Review audits",
             ].map((item) => <div className="rounded-2xl border border-white/15 bg-white/10 p-3 font-semibold text-white backdrop-blur" key={item}>{item}</div>)}
           </div>

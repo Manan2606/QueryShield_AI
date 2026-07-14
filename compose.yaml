@@ -1,0 +1,105 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: queryshield
+      POSTGRES_USER: queryshield
+      POSTGRES_PASSWORD: queryshield
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U queryshield -d queryshield"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg2://queryshield:queryshield@postgres:5432/queryshield
+      JWT_SECRET_KEY: local-dev-change-me
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+      FRONTEND_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      GCP_PROJECT_ID: ""
+      BIGQUERY_DATASET_ID: queryshield_demo
+      GEMINI_API_KEY: ""
+      GEMINI_MODEL: gemini-2.5-flash
+      MAX_BYTES_BILLED: 100000000
+      QUERY_RESULT_ROW_LIMIT: 100
+      QUERY_TIMEOUT_SECONDS: 30
+      UPLOAD_DIR: /app/storage/uploads
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg2://queryshield:queryshield@postgres:5432/queryshield
+      JWT_SECRET_KEY: local-dev-change-me
+      JWT_ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+      FRONTEND_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      GCP_PROJECT_ID: ""
+      BIGQUERY_DATASET_ID: queryshield_demo
+      GEMINI_API_KEY: ""
+      GEMINI_MODEL: gemini-2.5-flash
+      MAX_BYTES_BILLED: 100000000
+      QUERY_RESULT_ROW_LIMIT: 100
+      QUERY_TIMEOUT_SECONDS: 30
+      BIGQUERY_ON_DEMAND_PRICE_PER_TIB: 6.25
+      BIGQUERY_CURRENCY: USD
+      UPLOAD_DIR: /app/storage/uploads
+      MAX_UPLOAD_SIZE_MB: 20
+      CSV_PREVIEW_ROWS: 10
+    volumes:
+      - upload_data:/app/storage/uploads
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then((r)=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  upload_data:

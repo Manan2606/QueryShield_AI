@@ -10,7 +10,7 @@ import type { User } from "@/lib/types";
 const navItems = [
   { href: "/dashboard", label: "Dashboard", marker: "01" },
   { href: "/datasets", label: "Datasets", marker: "02" },
-  { href: "/queries/new", label: "Ask Query", marker: "03" },
+  { href: "/queries/new", label: "Analysis", marker: "03" },
   { href: "/history", label: "Query History", marker: "04" },
   { href: "/audit-logs", label: "Audit Logs", marker: "05" },
 ];
@@ -101,7 +101,7 @@ export default function AppShell({ title, children }: AppShellProps) {
 
           <div className="m-3 rounded-2xl border border-white/10 bg-white/10 p-4 shadow-inner">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-teal-200">Phase 1 MVP</p>
-            <p className="mt-2 text-sm leading-6 text-slate-300">Upload CSV data, generate governed SQL, validate cost, execute bounded results, and review audit history.</p>
+            <p className="mt-2 text-sm leading-6 text-slate-300">Upload CSV data, ask questions, receive governed results, and review audit history.</p>
           </div>
         </div>
       </aside>

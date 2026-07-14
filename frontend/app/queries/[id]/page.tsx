@@ -2,20 +2,47 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import AiSummaryCard from "@/components/analysis/AiSummaryCard";
+import AnalysisResultHeader from "@/components/analysis/AnalysisResultHeader";
+import GovernanceDetails from "@/components/analysis/GovernanceDetails";
+import ResultChart from "@/components/analysis/ResultChart";
 import AppShell from "@/components/mvp/AppShell";
 import ErrorAlert from "@/components/mvp/ErrorAlert";
-import QueryPipeline from "@/components/mvp/QueryPipeline";
 import ResultTable from "@/components/mvp/ResultTable";
 import StatusBadge from "@/components/mvp/StatusBadge";
-import { displayCell, formatDate, formatNumber } from "@/components/mvp/format";
+import { formatDate, formatNumber } from "@/components/mvp/format";
 import * as api from "@/lib/api";
-import type { AuditLog, QueryLifecycleResponse } from "@/lib/types";
+import type { AuditLog, QueryExecutionResponse, QueryLifecycleResponse } from "@/lib/types";
 
 export default function QueryDetailPage() {
   const params = useParams<{ id: string }>();
   const queryId = Number(params.id);
-  return <AppShell title="Query Detail">{({ token }) => <QueryDetailContent queryId={queryId} token={token} />}</AppShell>;
+  return <AppShell title="Analysis Detail">{({ token }) => <QueryDetailContent queryId={queryId} token={token} />}</AppShell>;
+}
+
+function executionFromLifecycle(lifecycle: QueryLifecycleResponse): QueryExecutionResponse | null {
+  if (lifecycle.execution.status !== "succeeded" && !lifecycle.execution.result_rows.length) return null;
+  return {
+    query_request_id: lifecycle.query.id,
+    dataset_id: lifecycle.query.dataset_id,
+    execution_status: lifecycle.execution.status,
+    execution_job_id: lifecycle.execution.execution_job_id,
+    execution_location: lifecycle.execution.execution_location,
+    execution_bytes_processed: lifecycle.execution.execution_bytes_processed,
+    execution_bytes_billed: lifecycle.execution.execution_bytes_billed,
+    execution_cache_hit: lifecycle.execution.execution_cache_hit,
+    result_row_count: lifecycle.execution.result_row_count || lifecycle.execution.result_rows.length,
+    result_columns: lifecycle.execution.result_columns,
+    result_rows: lifecycle.execution.result_rows,
+    result_truncated: lifecycle.execution.result_truncated || false,
+    row_limit: lifecycle.execution.result_row_count || lifecycle.execution.result_rows.length,
+    execution_error: lifecycle.execution.execution_error,
+    execution_started_at: lifecycle.execution.execution_started_at,
+    execution_completed_at: lifecycle.execution.execution_completed_at,
+    executed_at: lifecycle.execution.executed_at,
+    generated_sql: lifecycle.generation.generated_sql || "",
+  };
 }
 
 function QueryDetailContent({ token, queryId }: { token: string; queryId: number }) {
@@ -35,7 +62,7 @@ function QueryDetailContent({ token, queryId }: { token: string; queryId: number
       setLifecycle(nextLifecycle);
       setAuditLogs(nextAudit.items);
     } catch (err) {
-      setError(err instanceof api.ApiError ? err.message : "Query detail failed to load.");
+      setError(err instanceof api.ApiError ? err.message : "Analysis detail failed to load.");
     } finally {
       setLoading(false);
     }
@@ -43,72 +70,107 @@ function QueryDetailContent({ token, queryId }: { token: string; queryId: number
 
   useEffect(() => { void load(); }, [token, queryId]);
 
-  const statuses = useMemo(() => lifecycle ? [lifecycle.generation.status, lifecycle.validation.status, lifecycle.dry_run.status, lifecycle.execution.status] : ["waiting", "waiting", "waiting", "waiting"], [lifecycle]);
-
   if (loading) {
-    return <div className="app-surface p-4 text-sm text-slate-600">Loading query...</div>;
+    return <div className="app-surface p-4 text-sm text-slate-600">Loading analysis...</div>;
   }
 
   if (!lifecycle) {
-    return <ErrorAlert message={error || "Query not found."} />;
+    return <ErrorAlert message={error || "Analysis not found."} />;
   }
+
+  const execution = executionFromLifecycle(lifecycle);
+  const generated = lifecycle.generation.generated_sql ? {
+    id: lifecycle.query.id,
+    dataset_id: lifecycle.query.dataset_id,
+    question: lifecycle.query.question,
+    generated_sql: lifecycle.generation.generated_sql,
+    model_name: lifecycle.generation.model_name,
+    status: lifecycle.generation.status,
+    created_at: lifecycle.query.created_at,
+    validation_status: lifecycle.validation.status,
+    is_safe: lifecycle.validation.is_safe,
+    validation_errors: lifecycle.validation.errors,
+    validation_warnings: lifecycle.validation.warnings,
+    validated_at: lifecycle.validation.validated_at,
+    dry_run_status: lifecycle.dry_run.status,
+    estimated_bytes_processed: lifecycle.dry_run.estimated_bytes_processed,
+    estimated_cost: lifecycle.dry_run.estimated_cost,
+    bytes_limit_exceeded: lifecycle.dry_run.bytes_limit_exceeded,
+    execution_eligible: lifecycle.dry_run.execution_eligible,
+    dry_run_at: lifecycle.dry_run.dry_run_at,
+  } : null;
+  const validation = lifecycle.generation.generated_sql ? {
+    query_request_id: lifecycle.query.id,
+    dataset_id: lifecycle.query.dataset_id,
+    validation_status: lifecycle.validation.status,
+    is_safe: lifecycle.validation.is_safe || false,
+    statement_type: lifecycle.validation.statement_type,
+    referenced_tables: lifecycle.validation.referenced_tables,
+    errors: lifecycle.validation.errors,
+    warnings: lifecycle.validation.warnings,
+    validated_at: lifecycle.validation.validated_at,
+    generated_sql: lifecycle.generation.generated_sql,
+    normalized_sql: null,
+  } : null;
+  const dryRun = lifecycle.generation.generated_sql && lifecycle.dry_run.maximum_bytes_billed !== null ? {
+    query_request_id: lifecycle.query.id,
+    dataset_id: lifecycle.query.dataset_id,
+    dry_run_status: lifecycle.dry_run.status,
+    dry_run_valid: lifecycle.dry_run.dry_run_valid || false,
+    estimated_bytes_processed: lifecycle.dry_run.estimated_bytes_processed,
+    estimated_mib_processed: lifecycle.dry_run.estimated_mib_processed,
+    estimated_gib_processed: lifecycle.dry_run.estimated_gib_processed,
+    estimated_tib_processed: lifecycle.dry_run.estimated_tib_processed,
+    maximum_bytes_billed: lifecycle.dry_run.maximum_bytes_billed,
+    maximum_mib_billed: 0,
+    bytes_limit_exceeded: lifecycle.dry_run.bytes_limit_exceeded || false,
+    estimated_cost: lifecycle.dry_run.estimated_cost,
+    estimated_cost_currency: lifecycle.dry_run.estimated_cost_currency || "USD",
+    execution_eligible: lifecycle.dry_run.execution_eligible,
+    dry_run_error: lifecycle.dry_run.dry_run_error,
+    dry_run_at: lifecycle.dry_run.dry_run_at,
+    dry_run_job_id: lifecycle.dry_run.dry_run_job_id,
+    dry_run_location: lifecycle.dry_run.dry_run_location,
+    generated_sql: lifecycle.generation.generated_sql,
+    warnings: [],
+  } : null;
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <Link className="text-sm font-semibold text-indigo-700" href="/history">Back to history</Link>
-          <h2 className="mt-2 text-xl font-bold text-slate-950">Query {lifecycle.query.id}</h2>
-          <p className="mt-1 max-w-3xl text-sm text-slate-700">{lifecycle.query.question}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <h2 className="text-xl font-bold text-slate-950">Saved analysis</h2>
+            <StatusBadge status={lifecycle.execution.status} />
+          </div>
           <p className="mt-1 text-xs text-slate-500">{lifecycle.query.dataset_name || "Dataset unavailable"} - {formatDate(lifecycle.query.created_at)}</p>
         </div>
         <button className="btn-secondary" onClick={() => void load()} type="button">Refresh</button>
       </div>
       <ErrorAlert message={error} />
-      <QueryPipeline statuses={statuses} />
 
-      <section className="grid gap-6 xl:grid-cols-2">
-        <div className="app-surface p-4">
-          <div className="flex flex-wrap items-center gap-2"><h3 className="text-base font-bold text-slate-950">Generation</h3><StatusBadge status={lifecycle.generation.status} /></div>
-          <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2"><div><dt className="font-semibold text-slate-900">Model</dt><dd>{lifecycle.generation.model_name || "Not available"}</dd></div><div><dt className="font-semibold text-slate-900">Table</dt><dd className="break-all">{lifecycle.generation.generated_for_table_id || lifecycle.query.bigquery_table_id || "Not available"}</dd></div></dl>
-          {lifecycle.generation.error_message ? <p className="mt-3 text-sm text-red-700">{lifecycle.generation.error_message}</p> : null}
-          <pre className="mt-4 max-h-80 overflow-auto rounded-md bg-slate-950 p-4 text-sm text-slate-100"><code>{lifecycle.generation.generated_sql || "No SQL generated"}</code></pre>
-        </div>
+      {execution ? (
+        <>
+          <AnalysisResultHeader execution={execution} question={lifecycle.query.question} />
+          <AiSummaryCard />
+          <ResultChart execution={execution} />
+          <section className="app-surface p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-base font-bold text-slate-950">Result table</h3>
+              <span className="text-sm font-semibold text-slate-600">{formatNumber(execution.result_row_count)} rows returned</span>
+            </div>
+            <div className="mt-4"><ResultTable columns={execution.result_columns} rows={execution.result_rows} /></div>
+          </section>
+        </>
+      ) : (
+        <section className="app-surface p-4">
+          <h3 className="text-base font-bold text-slate-950">No stored result rows</h3>
+          <p className="mt-2 text-sm text-slate-600">This analysis has not completed successfully, or no bounded result rows were stored.</p>
+        </section>
+      )}
 
-        <div className="app-surface p-4">
-          <div className="flex flex-wrap items-center gap-2"><h3 className="text-base font-bold text-slate-950">Validation</h3><StatusBadge status={lifecycle.validation.status} /><StatusBadge status={lifecycle.validation.is_safe ? "safe" : "blocked"} /></div>
-          <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2"><div><dt className="font-semibold text-slate-900">Statement</dt><dd>{lifecycle.validation.statement_type || "Not available"}</dd></div><div><dt className="font-semibold text-slate-900">Validated</dt><dd>{formatDate(lifecycle.validation.validated_at)}</dd></div><div className="sm:col-span-2"><dt className="font-semibold text-slate-900">Referenced tables</dt><dd>{lifecycle.validation.referenced_tables.join(", ") || "None"}</dd></div></dl>
-          {lifecycle.validation.errors.length ? <p className="mt-3 text-sm text-red-700">{lifecycle.validation.errors.join(", ")}</p> : null}
-          {lifecycle.validation.warnings.length ? <p className="mt-3 text-sm text-amber-700">{lifecycle.validation.warnings.join(", ")}</p> : null}
-        </div>
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-2">
-        <div className="app-surface p-4">
-          <div className="flex flex-wrap items-center gap-2"><h3 className="text-base font-bold text-slate-950">Dry run</h3><StatusBadge status={lifecycle.dry_run.status} /><StatusBadge status={lifecycle.dry_run.execution_eligible ? "eligible" : "blocked"} /></div>
-          <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2"><div><dt className="font-semibold text-slate-900">Estimated bytes</dt><dd>{formatNumber(lifecycle.dry_run.estimated_bytes_processed)}</dd></div><div><dt className="font-semibold text-slate-900">Maximum bytes</dt><dd>{formatNumber(lifecycle.dry_run.maximum_bytes_billed)}</dd></div><div><dt className="font-semibold text-slate-900">Checked</dt><dd>{formatDate(lifecycle.dry_run.dry_run_at)}</dd></div><div><dt className="font-semibold text-slate-900">Job</dt><dd className="break-all">{lifecycle.dry_run.dry_run_job_id || "Not available"}</dd></div></dl>
-          {lifecycle.dry_run.dry_run_error ? <p className="mt-3 text-sm text-red-700">{lifecycle.dry_run.dry_run_error}</p> : null}
-        </div>
-
-        <div className="app-surface p-4">
-          <div className="flex flex-wrap items-center gap-2"><h3 className="text-base font-bold text-slate-950">Execution</h3><StatusBadge status={lifecycle.execution.status} />{lifecycle.execution.result_truncated ? <StatusBadge status="truncated" /> : null}</div>
-          <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2"><div><dt className="font-semibold text-slate-900">Rows</dt><dd>{formatNumber(lifecycle.execution.result_row_count)}</dd></div><div><dt className="font-semibold text-slate-900">Bytes processed</dt><dd>{formatNumber(lifecycle.execution.execution_bytes_processed)}</dd></div><div><dt className="font-semibold text-slate-900">Executed</dt><dd>{formatDate(lifecycle.execution.executed_at)}</dd></div><div><dt className="font-semibold text-slate-900">Job</dt><dd className="break-all">{lifecycle.execution.execution_job_id || "Not available"}</dd></div></dl>
-          {lifecycle.execution.execution_error ? <p className="mt-3 text-sm text-red-700">{lifecycle.execution.execution_error}</p> : null}
-        </div>
-      </section>
-
-      <section className="app-surface p-4">
-        <h3 className="text-base font-bold text-slate-950">Bounded results</h3>
-        <div className="mt-4"><ResultTable columns={lifecycle.execution.result_columns} rows={lifecycle.execution.result_rows} /></div>
-      </section>
-
-      <section className="app-surface p-4">
-        <h3 className="text-base font-bold text-slate-950">Audit timeline</h3>
-        <ol className="mt-4 space-y-3 border-l border-slate-200 pl-4 text-sm">
-          {auditLogs.map((log) => <li key={log.id}><div className="font-semibold text-slate-900">{formatDate(log.created_at)} - {log.action}</div>{log.details ? <pre className="mt-1 overflow-auto rounded-md bg-slate-50 p-2 text-xs text-slate-700">{displayCell(log.details)}</pre> : null}</li>)}
-        </ol>
-        {!auditLogs.length ? <p className="mt-4 text-sm text-slate-600">No audit events recorded.</p> : null}
-      </section>
+      <GovernanceDetails auditLogs={auditLogs} dryRun={dryRun} execution={execution} generated={generated} queryId={lifecycle.query.id} validation={validation} />
     </div>
   );
 }
