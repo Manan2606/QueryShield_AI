@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - dev
+      - main
 
 permissions:
   contents: read
@@ -72,7 +72,7 @@ jobs:
             --memory 1Gi \
             --cpu 1 \
             --set-env-vars "^|^APP_ENV=production|DATABASE_URL=sqlite:////tmp/queryshield.db|GCP_PROJECT_ID=$GCP_PROJECT_ID|GCP_REGION=$GCP_REGION|BIGQUERY_DATASET_ID=$BIGQUERY_DATASET_ID|STORAGE_BACKEND=gcs|GCS_UPLOAD_BUCKET=$GCS_UPLOAD_BUCKET|FRONTEND_ORIGINS=https://placeholder.invalid|GEMINI_MODEL=$GEMINI_MODEL|MAX_BYTES_BILLED=$MAX_BYTES_BILLED|QUERY_RESULT_ROW_LIMIT=$QUERY_RESULT_ROW_LIMIT|QUERY_TIMEOUT_SECONDS=$QUERY_TIMEOUT_SECONDS" \
-            --set-secrets "JWT_SECRET_KEY=queryshield-jwt-secret:latest,GEMINI_API_KEY=queryshield-gemini-api-key:latest"
+            --set-secrets "JWT_SECRET_KEY=queryshield_jwt_secret:latest,GEMINI_API_KEY=queryshield_gemini_api_key:latest"
 
       - name: Capture backend URL
         run: |
