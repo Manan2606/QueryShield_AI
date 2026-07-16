@@ -1,0 +1,133 @@
+name: Deploy MVP-1 to GCP
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'queryshield-501723' }}
+  GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+  ARTIFACT_REGISTRY_REPO: ${{ vars.ARTIFACT_REGISTRY_REPO || 'queryshield' }}
+  BACKEND_SERVICE: ${{ vars.BACKEND_SERVICE || 'queryshield-backend' }}
+  FRONTEND_SERVICE: ${{ vars.FRONTEND_SERVICE || 'queryshield-frontend' }}
+  BACKEND_SERVICE_ACCOUNT: ${{ vars.BACKEND_SERVICE_ACCOUNT || 'queryshield-backend-sa@queryshield-501723.iam.gserviceaccount.com' }}
+  GCS_UPLOAD_BUCKET: ${{ vars.GCS_UPLOAD_BUCKET || 'queryshield_ai' }}
+  BIGQUERY_DATASET_ID: ${{ vars.BIGQUERY_DATASET_ID || 'queryshield_demo' }}
+  MAX_BYTES_BILLED: ${{ vars.MAX_BYTES_BILLED || '100000000' }}
+  QUERY_RESULT_ROW_LIMIT: ${{ vars.QUERY_RESULT_ROW_LIMIT || '100' }}
+  QUERY_TIMEOUT_SECONDS: ${{ vars.QUERY_TIMEOUT_SECONDS || '30' }}
+  GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+  BACKEND_IMAGE_NAME: queryshield-backend
+  FRONTEND_IMAGE_NAME: queryshield-frontend
+
+jobs:
+  deploy:
+    name: Build, push, and deploy Cloud Run services
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER || 'projects/752311509951/locations/global/workloadIdentityPools/github-actions-pool/providers/github' }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT || 'queryshield-github-deploy-sa@queryshield-501723.iam.gserviceaccount.com' }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+
+      - name: Build backend image
+        run: |
+          BACKEND_IMAGE_URI="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$ARTIFACT_REGISTRY_REPO/$BACKEND_IMAGE_NAME:$GITHUB_SHA"
+          docker build -f backend/Dockerfile -t "$BACKEND_IMAGE_URI" backend
+          docker tag "$BACKEND_IMAGE_URI" "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$ARTIFACT_REGISTRY_REPO/$BACKEND_IMAGE_NAME:latest"
+          echo "BACKEND_IMAGE_URI=$BACKEND_IMAGE_URI" >> "$GITHUB_ENV"
+
+      - name: Push backend image
+        run: |
+          docker push "$BACKEND_IMAGE_URI"
+          docker push "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$ARTIFACT_REGISTRY_REPO/$BACKEND_IMAGE_NAME:latest"
+
+      - name: Deploy backend to Cloud Run
+        run: |
+          gcloud run deploy "$BACKEND_SERVICE" \
+            --image "$BACKEND_IMAGE_URI" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --service-account "$BACKEND_SERVICE_ACCOUNT" \
+            --allow-unauthenticated \
+            --min-instances 0 \
+            --max-instances 1 \
+            --memory 1Gi \
+            --cpu 1 \
+            --set-env-vars "^|^APP_ENV=production|DATABASE_URL=sqlite:////tmp/queryshield.db|GCP_PROJECT_ID=$GCP_PROJECT_ID|GCP_REGION=$GCP_REGION|BIGQUERY_DATASET_ID=$BIGQUERY_DATASET_ID|STORAGE_BACKEND=gcs|GCS_UPLOAD_BUCKET=$GCS_UPLOAD_BUCKET|FRONTEND_ORIGINS=https://placeholder.invalid|GEMINI_MODEL=$GEMINI_MODEL|MAX_BYTES_BILLED=$MAX_BYTES_BILLED|QUERY_RESULT_ROW_LIMIT=$QUERY_RESULT_ROW_LIMIT|QUERY_TIMEOUT_SECONDS=$QUERY_TIMEOUT_SECONDS" \
+            --set-secrets "JWT_SECRET_KEY=queryshield-jwt-secret:latest,GEMINI_API_KEY=queryshield-gemini-api-key:latest"
+
+      - name: Capture backend URL
+        run: |
+          BACKEND_URL="$(gcloud run services describe "$BACKEND_SERVICE" --region "$GCP_REGION" --format='value(status.url)')"
+          echo "BACKEND_URL=$BACKEND_URL" >> "$GITHUB_ENV"
+          echo "Backend URL: $BACKEND_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build frontend image with backend URL
+        run: |
+          FRONTEND_IMAGE_URI="$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$ARTIFACT_REGISTRY_REPO/$FRONTEND_IMAGE_NAME:$GITHUB_SHA"
+          docker build \
+            --build-arg NEXT_PUBLIC_API_BASE_URL="$BACKEND_URL" \
+            -f frontend/Dockerfile \
+            -t "$FRONTEND_IMAGE_URI" \
+            frontend
+          docker tag "$FRONTEND_IMAGE_URI" "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$ARTIFACT_REGISTRY_REPO/$FRONTEND_IMAGE_NAME:latest"
+          echo "FRONTEND_IMAGE_URI=$FRONTEND_IMAGE_URI" >> "$GITHUB_ENV"
+
+      - name: Push frontend image
+        run: |
+          docker push "$FRONTEND_IMAGE_URI"
+          docker push "$GCP_REGION-docker.pkg.dev/$GCP_PROJECT_ID/$ARTIFACT_REGISTRY_REPO/$FRONTEND_IMAGE_NAME:latest"
+
+      - name: Deploy frontend to Cloud Run
+        run: |
+          gcloud run deploy "$FRONTEND_SERVICE" \
+            --image "$FRONTEND_IMAGE_URI" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --allow-unauthenticated \
+            --min-instances 0 \
+            --max-instances 1 \
+            --memory 512Mi \
+            --cpu 1 \
+            --set-env-vars "NEXT_PUBLIC_API_BASE_URL=$BACKEND_URL"
+
+      - name: Capture frontend URL
+        run: |
+          FRONTEND_URL="$(gcloud run services describe "$FRONTEND_SERVICE" --region "$GCP_REGION" --format='value(status.url)')"
+          echo "FRONTEND_URL=$FRONTEND_URL" >> "$GITHUB_ENV"
+          echo "Frontend URL: $FRONTEND_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update backend CORS with frontend URL
+        run: |
+          gcloud run services update "$BACKEND_SERVICE" \
+            --region "$GCP_REGION" \
+            --update-env-vars "FRONTEND_ORIGINS=$FRONTEND_URL"
+
+      - name: Verify deployed health endpoints
+        run: |
+          curl --fail --show-error --silent "$BACKEND_URL/health"
+          curl --fail --show-error --silent "$FRONTEND_URL" > /dev/null
+          {
+            echo "Backend image: $BACKEND_IMAGE_URI"
+            echo "Frontend image: $FRONTEND_IMAGE_URI"
+            echo "CORS updated to: $FRONTEND_URL"
+            echo "MVP-1 database: sqlite:////tmp/queryshield.db"
+          } >> "$GITHUB_STEP_SUMMARY"

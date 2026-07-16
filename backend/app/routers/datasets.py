@@ -1,6 +1,4 @@
 from datetime import datetime
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
@@ -16,6 +14,7 @@ from app.services.audit_service import create_audit_log
 from app.services.bigquery_service import get_bigquery_table_info as fetch_bigquery_table_info
 from app.services.bigquery_service import load_csv_to_bigquery
 from app.services.csv_service import analyze_csv, preview_csv, save_upload_file, validate_csv_file
+from app.services.storage_service import get_upload_storage
 from app.services.dataset_service import (
     DatasetDeletionBlocked,
     create_dataset,
@@ -123,8 +122,12 @@ def upload_csv(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     try:
-        original_filename, storage_path = save_upload_file(file, dataset_id)
-        analysis = analyze_csv(storage_path)
+        original_filename, storage_path, analysis_path = save_upload_file(file, dataset_id)
+        storage = get_upload_storage()
+        try:
+            analysis = analyze_csv(analysis_path)
+        finally:
+            storage.cleanup_local_path(analysis_path)
     except ValueError as exc:
         dataset.status = "failed"
         db.commit()
@@ -191,7 +194,12 @@ def preview_dataset_csv(
     if not dataset.storage_path:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No CSV file uploaded for this dataset")
 
-    preview = preview_csv(dataset.storage_path, limit=settings.CSV_PREVIEW_ROWS)
+    storage = get_upload_storage()
+    preview_path = storage.local_path_for_read(dataset.storage_path)
+    try:
+        preview = preview_csv(preview_path, limit=settings.CSV_PREVIEW_ROWS)
+    finally:
+        storage.cleanup_local_path(preview_path)
     return CSVPreviewResponse(dataset_id=dataset.id, columns=preview["columns"], rows=preview["rows"])
 
 
@@ -207,7 +215,8 @@ def load_dataset_to_bigquery(
 
     if not dataset.storage_path:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No CSV file uploaded for this dataset")
-    if not Path(dataset.storage_path).exists():
+    storage = get_upload_storage()
+    if not storage.exists(dataset.storage_path):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded CSV file was not found")
 
     columns = (

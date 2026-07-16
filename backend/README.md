@@ -7,7 +7,7 @@ FastAPI backend for QueryShield AI. It owns authentication, dataset records, CSV
 - Authenticate users with JWT access tokens.
 - Enforce dataset and query ownership.
 - Store dataset metadata, detected columns, query lifecycle records, and audit logs.
-- Save uploaded CSV files locally for the MVP.
+- Save uploaded CSV files locally for development or to Cloud Storage in deployed GCP mode.
 - Load approved CSV datasets into BigQuery.
 - Generate BigQuery SQL with Gemini for loaded datasets.
 - Validate generated SQL with SQLGlot and table allowlisting.
@@ -125,7 +125,9 @@ Backend variables are defined in `app/core/config.py` and documented in `.env.ex
 - `JWT_ALGORITHM`
 - `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `FRONTEND_ORIGINS`
+- `APP_ENV`
 - `GCP_PROJECT_ID`
+- `GCP_REGION`
 - `BIGQUERY_DATASET_ID`
 - `GOOGLE_APPLICATION_CREDENTIALS`
 - `GEMINI_API_KEY`
@@ -135,6 +137,8 @@ Backend variables are defined in `app/core/config.py` and documented in `.env.ex
 - `QUERY_TIMEOUT_SECONDS`
 - `BIGQUERY_ON_DEMAND_PRICE_PER_TIB`
 - `BIGQUERY_CURRENCY`
+- `STORAGE_BACKEND`
+- `GCS_UPLOAD_BUCKET`
 - `UPLOAD_DIR`
 - `MAX_UPLOAD_SIZE_MB`
 - `CSV_PREVIEW_ROWS`
@@ -182,10 +186,10 @@ Keep service account JSON files outside the repository or under ignored credenti
 The backend image is built from `backend/Dockerfile` and starts FastAPI with:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
 ```
 
-The image uses Python 3.11 slim, installs `requirements.txt`, runs as a non-root `queryshield` user, exposes port `8000`, and keeps `/app/storage/uploads` writable for uploaded CSV files.
+The image uses Python 3.11 slim, installs `requirements.txt`, runs as a non-root `queryshield` user, and starts on the Cloud Run `PORT` environment variable with a default of `8000`. Local mode can keep `/app/storage/uploads` writable; deployed GCP mode should use `STORAGE_BACKEND=gcs` and `GCS_UPLOAD_BUCKET`.
 
 In Docker Compose, migrations run through a one-shot `migrate` service:
 
@@ -203,3 +207,19 @@ The default Compose backend connects to PostgreSQL with the internal hostname `p
 - BigQuery jobs use Standard SQL and `maximum_bytes_billed`.
 - Result rows are bounded before storage and response.
 - Audit metadata is sanitized to avoid passwords, tokens, API keys, database URLs, and service account content.
+
+## GCP Deployment Notes
+
+For the MVP-1 GCP demo, use SQLite in Cloud Run `/tmp` for metadata and Cloud Storage instead of container-local upload storage:
+
+```env
+APP_ENV=production
+DATABASE_URL=sqlite:////tmp/queryshield.db
+STORAGE_BACKEND=gcs
+GCS_UPLOAD_BUCKET=your-upload-bucket
+FRONTEND_ORIGINS=https://your-frontend-service-url
+```
+
+Cloud Run should provide `JWT_SECRET_KEY` and `GEMINI_API_KEY` from Secret Manager. `DATABASE_URL` is a non-secret MVP-1 value set to `sqlite:////tmp/queryshield.db`. Prefer the Cloud Run runtime service account for BigQuery and Cloud Storage access instead of `GOOGLE_APPLICATION_CREDENTIALS` in production.
+
+See `../docs/gcp-mvp1-deployment.md` for the deployment checklist and `../docs/gcp-architecture.md` for diagrams.

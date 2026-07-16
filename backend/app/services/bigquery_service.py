@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import settings
+from app.services.storage_service import parse_gcs_uri
 
 
 BIGQUERY_TYPE_MAP = {
@@ -101,9 +102,14 @@ def load_csv_to_bigquery(dataset, dataset_columns) -> dict[str, Any]:
     if not dataset.storage_path:
         raise ValueError("Dataset does not have an uploaded CSV file")
 
-    csv_path = Path(dataset.storage_path)
-    if not csv_path.exists():
-        raise ValueError("Uploaded CSV file was not found on local storage")
+    is_gcs_uri = dataset.storage_path.startswith("gs://")
+    if is_gcs_uri:
+        parse_gcs_uri(dataset.storage_path)
+        csv_path = None
+    else:
+        csv_path = Path(dataset.storage_path)
+        if not csv_path.exists():
+            raise ValueError("Uploaded CSV file was not found on local storage")
 
     columns = list(dataset_columns)
     if not columns:
@@ -128,8 +134,11 @@ def load_csv_to_bigquery(dataset, dataset_columns) -> dict[str, Any]:
         allow_quoted_newlines=True,
     )
 
-    with csv_path.open("rb") as csv_file:
-        load_job = client.load_table_from_file(csv_file, table_id, job_config=job_config)
+    if is_gcs_uri:
+        load_job = client.load_table_from_uri(dataset.storage_path, table_id, job_config=job_config)
+    else:
+        with csv_path.open("rb") as csv_file:
+            load_job = client.load_table_from_file(csv_file, table_id, job_config=job_config)
 
     load_job.result()
     table = client.get_table(table_id)

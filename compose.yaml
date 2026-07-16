@@ -19,18 +19,22 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
+      APP_ENV: local
       DATABASE_URL: postgresql+psycopg2://queryshield:queryshield@postgres:5432/queryshield
       JWT_SECRET_KEY: local-dev-change-me
       JWT_ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: 60
       FRONTEND_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
       GCP_PROJECT_ID: ""
+      GCP_REGION: us-central1
       BIGQUERY_DATASET_ID: queryshield_demo
       GEMINI_API_KEY: ""
       GEMINI_MODEL: gemini-2.5-flash
       MAX_BYTES_BILLED: 100000000
       QUERY_RESULT_ROW_LIMIT: 100
       QUERY_TIMEOUT_SECONDS: 30
+      STORAGE_BACKEND: local
+      GCS_UPLOAD_BUCKET: ""
       UPLOAD_DIR: /app/storage/uploads
     command: ["python", "-m", "alembic", "upgrade", "head"]
     depends_on:
@@ -43,12 +47,14 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
+      APP_ENV: local
       DATABASE_URL: postgresql+psycopg2://queryshield:queryshield@postgres:5432/queryshield
       JWT_SECRET_KEY: local-dev-change-me
       JWT_ALGORITHM: HS256
       ACCESS_TOKEN_EXPIRE_MINUTES: 60
       FRONTEND_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
       GCP_PROJECT_ID: ""
+      GCP_REGION: us-central1
       BIGQUERY_DATASET_ID: queryshield_demo
       GEMINI_API_KEY: ""
       GEMINI_MODEL: gemini-2.5-flash
@@ -57,6 +63,8 @@ services:
       QUERY_TIMEOUT_SECONDS: 30
       BIGQUERY_ON_DEMAND_PRICE_PER_TIB: 6.25
       BIGQUERY_CURRENCY: USD
+      STORAGE_BACKEND: local
+      GCS_UPLOAD_BUCKET: ""
       UPLOAD_DIR: /app/storage/uploads
       MAX_UPLOAD_SIZE_MB: 20
       CSV_PREVIEW_ROWS: 10

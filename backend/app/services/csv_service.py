@@ -1,12 +1,9 @@
 import csv
-import os
-import uuid
-from pathlib import Path
 
 from fastapi import UploadFile
 
 from app.core.config import settings
-from app.models.dataset_column import DatasetColumn
+from app.services.storage_service import get_upload_storage
 
 
 ALLOWED_CONTENT_TYPES = {"text/csv", "application/csv", "application/vnd.ms-excel"}
@@ -26,27 +23,10 @@ def validate_csv_file(file: UploadFile) -> None:
         raise ValueError("File is too large")
 
 
-def save_upload_file(file: UploadFile, dataset_id: int) -> tuple[str, str]:
+def save_upload_file(file: UploadFile, dataset_id: int) -> tuple[str, str, str]:
     validate_csv_file(file)
-
-    backend_root = Path(__file__).resolve().parents[2]
-    upload_dir = Path(settings.UPLOAD_DIR)
-    if not upload_dir.is_absolute():
-        upload_dir = backend_root / upload_dir
-    upload_dir.mkdir(parents=True, exist_ok=True)
-
-    suffix = Path(file.filename).suffix.lower() or ".csv"
-    safe_name = f"dataset_{dataset_id}_{uuid.uuid4().hex}{suffix}"
-    storage_path = upload_dir / safe_name
-
-    contents = file.file.read()
-    if not contents:
-        raise ValueError("Empty file")
-
-    with storage_path.open("wb") as handle:
-        handle.write(contents)
-
-    return file.filename, str(storage_path)
+    stored_upload = get_upload_storage().save_upload(file, dataset_id)
+    return stored_upload.original_filename, stored_upload.storage_path, stored_upload.analysis_path
 
 
 def infer_column_type(values: list[str]) -> str:

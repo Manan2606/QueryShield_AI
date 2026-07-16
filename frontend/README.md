@@ -86,7 +86,7 @@ Charts are built only from returned bounded result rows when the shape is compat
 
 ## Docker
 
-The frontend image is built from `frontend/Dockerfile` using npm and `package-lock.json`. It builds the Next.js App Router application with standalone output and runs the production server as a non-root `nextjs` user on port `3000`.
+The frontend image is built from `frontend/Dockerfile` using npm and `package-lock.json`. It builds the Next.js App Router application with standalone output and runs the production server as a non-root `nextjs` user on the `PORT` environment variable, defaulting to `8080` in the image for Cloud Run compatibility.
 
 For local Docker Compose, `NEXT_PUBLIC_API_BASE_URL` is set at build time to:
 
@@ -111,3 +111,9 @@ This is acceptable for the local MVP but should be hardened before production, l
 - Ask a natural-language question.
 - Click Analyze to generate SQL, validate safety, run a BigQuery dry run, and execute only when eligible.
 - Review bounded results, history, and audit logs.
+
+## GCP Deployment Notes
+
+The frontend can deploy as a separate Cloud Run service. Set `NEXT_PUBLIC_API_BASE_URL` to the deployed backend HTTPS URL before building the container image. This value is public browser configuration, not a secret.
+
+The MVP-1 deployment workflow is `../.github/workflows/deploy-gcp.yml`. See `../docs/gcp-mvp1-deployment.md` for required GitHub repository variables and manual GCP prerequisites.

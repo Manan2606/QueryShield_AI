@@ -65,9 +65,9 @@ Main components:
 - BigQuery
 - SQLAlchemy models
 - Alembic migrations
-- GCP services planned for deployment
+- Deploy MVP-1 to GCP using Cloud Run, Artifact Registry, SQLite demo mode, Cloud Storage, Secret Manager, BigQuery, Cloud Logging, and Workload Identity Federation
 
-See [docs/architecture.md](docs/architecture.md) for the system diagram, trust boundaries, and execution controls.
+See [docs/architecture.md](docs/architecture.md) for the system diagram, trust boundaries, and execution controls. See [docs/gcp-architecture.md](docs/gcp-architecture.md) for the GCP deployment architecture and CI/CD diagrams.
 
 ## Tech Stack
 
@@ -234,6 +234,7 @@ docker compose down -v
 
 Compose uses local development defaults only. Do not reuse the included database password or JWT secret in production. Gemini and BigQuery credentials are not required for container startup, and service-account JSON files must not be baked into images.
 
+
 ## Continuous Integration
 
 GitHub Actions CI is defined in `.github/workflows/ci.yml`. It runs on pull requests and pushes to `main` and `dev`.
@@ -248,20 +249,39 @@ CI verifies:
 - Docker image builds
 - Compose configuration validity
 
-The workflow does not deploy the application, push images, or require real Gemini or GCP credentials.
+The CI workflow does not deploy the application, push images, or require real Gemini or GCP credentials.
+## GCP MVP-1 Deployment
 
+MVP-1 deployment is documented in [docs/gcp-mvp1-deployment.md](docs/gcp-mvp1-deployment.md). The target deployment uses:
+
+- Cloud Run for the FastAPI backend and Next.js frontend services.
+- Artifact Registry for backend and frontend images.
+- BigQuery for analytical tables, dry runs, and controlled SQL execution.
+- Cloud Storage for uploaded CSV files in deployed environments.
+- Secret Manager for backend runtime secrets.
+- Cloud Logging for runtime logs.
+- Workload Identity Federation for GitHub Actions deployment authentication.
+- SQLite demo mode at `sqlite:////tmp/queryshield.db` for MVP-1 metadata only.
+
+Cloud SQL is intentionally excluded from MVP-1. Cloud Run filesystem storage is ephemeral, so signup users, query history, audit logs, and dataset metadata can reset after restart. The backend deploy uses min instances `0` and max instances `1` to reduce cost and avoid multiple isolated SQLite databases.
+
+The combined deployment workflow is `.github/workflows/deploy-gcp.yml`. It builds and pushes backend and frontend images to Artifact Registry, deploys both services to Cloud Run, maps `JWT_SECRET_KEY` and `GEMINI_API_KEY` from Secret Manager, captures service URLs, updates backend CORS to the exact frontend URL, and verifies health endpoints.
+
+Local development still supports SQLite or the Compose PostgreSQL service and local disk uploads. Deployed MVP-1 mode should set `STORAGE_BACKEND=gcs` and `GCS_UPLOAD_BUCKET=queryshield_ai`. The frontend should expose only `NEXT_PUBLIC_API_BASE_URL` and no backend secrets.
 ## Environment Variables
 
 Do not commit real `.env` files, API keys, database passwords, or service account JSON files.
 
 Backend variables:
 
+- `APP_ENV`
 - `DATABASE_URL`
 - `JWT_SECRET_KEY`
 - `JWT_ALGORITHM`
 - `ACCESS_TOKEN_EXPIRE_MINUTES`
 - `FRONTEND_ORIGINS`
 - `GCP_PROJECT_ID`
+- `GCP_REGION`
 - `BIGQUERY_DATASET_ID`
 - `GOOGLE_APPLICATION_CREDENTIALS`
 - `GEMINI_API_KEY`
@@ -271,6 +291,8 @@ Backend variables:
 - `QUERY_TIMEOUT_SECONDS`
 - `BIGQUERY_ON_DEMAND_PRICE_PER_TIB`
 - `BIGQUERY_CURRENCY`
+- `STORAGE_BACKEND`
+- `GCS_UPLOAD_BUCKET`
 - `UPLOAD_DIR`
 - `MAX_UPLOAD_SIZE_MB`
 - `CSV_PREVIEW_ROWS`
@@ -322,13 +344,13 @@ QueryShield AI is an MVP with a defense-in-depth design, not a claim of perfect 
 - Phase-1 MVP complete
 - Dockerization added for local Compose usage
 - GitHub Actions CI added for tests, builds, Docker image builds, and Compose validation
-- GCP deployment pending
+- Provision GCP resources and run Cloud Run deployment readiness added; live deployment pending manual GCP resource provisioning
 - AI result summary pending
 - Charts pending
 
 ## Roadmap
 
-- GCP deployment
+- Provision GCP resources and run Cloud Run deployment
 - AI result summaries
 - Charts
 - Demo video
@@ -336,7 +358,7 @@ QueryShield AI is an MVP with a defense-in-depth design, not a claim of perfect 
 
 ## Cost Awareness
 
-The MVP uses BigQuery dry runs, configurable maximum bytes billed, informational cost estimation, and limited result rows to reduce the risk of unexpectedly expensive generated queries.
+The MVP uses BigQuery dry runs, configurable maximum bytes billed, informational cost estimation, and limited result rows to reduce the risk of unexpectedly expensive generated queries. For GCP MVP-1 demo deployments, keep Cloud Run min instances at 0, max instances at 1, use SQLite demo mode only, keep BigQuery bytes limits low, set budget alerts, and delete demo resources after recording if they are no longer needed.
 
 ## License
 
