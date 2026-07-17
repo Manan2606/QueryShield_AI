@@ -1202,6 +1202,7 @@ def test_successful_execution_stores_metadata_bounded_rows_and_json_safe_values(
 
 
 def test_successful_execution_generates_and_stores_ai_summary(monkeypatch, client):
+    monkeypatch.setattr("app.services.query_execution_service.settings.AI_SUMMARY_ENABLED", True)
     headers, user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-summary@example.com")
     observed = {}
 
@@ -1246,6 +1247,7 @@ def test_successful_execution_generates_and_stores_ai_summary(monkeypatch, clien
 
 
 def test_empty_execution_rows_use_deterministic_ai_summary_without_gemini(monkeypatch, client):
+    monkeypatch.setattr("app.services.query_execution_service.settings.AI_SUMMARY_ENABLED", True)
     headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-empty-summary@example.com")
     monkeypatch.setattr("app.services.query_execution_service.execute_query", lambda *args, **kwargs: _fake_execution_result(rows=[]))
 
@@ -1260,6 +1262,7 @@ def test_empty_execution_rows_use_deterministic_ai_summary_without_gemini(monkey
 
 
 def test_ai_summary_failure_does_not_fail_query_execution(monkeypatch, client):
+    monkeypatch.setattr("app.services.query_execution_service.settings.AI_SUMMARY_ENABLED", True)
     headers, user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-summary-fail@example.com")
     monkeypatch.setattr("app.services.query_execution_service.execute_query", lambda *args, **kwargs: _fake_execution_result())
 
