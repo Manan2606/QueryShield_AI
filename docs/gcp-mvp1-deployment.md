@@ -1,6 +1,6 @@
 # GCP MVP-1 Deployment
 
-This guide deploys QueryShield AI for the MVP-1 demo on Google Cloud. It intentionally uses Cloud Run plus SQLite demo mode instead of Cloud SQL.
+This guide deploys QueryShield AI for the MVP-1 demo on Google Cloud. It intentionally uses Cloud Run plus SQLite demo mode instead of Cloud SQL. See [GCP Architecture](gcp-architecture.md) for the service map and runtime diagrams.
 
 ## Services Used
 
@@ -39,6 +39,8 @@ FRONTEND_SERVICE=queryshield-frontend
 BACKEND_SERVICE_ACCOUNT=queryshield-backend-sa@queryshield-501723.iam.gserviceaccount.com
 GCP_DEPLOY_SERVICE_ACCOUNT=queryshield-github-deploy-sa@queryshield-501723.iam.gserviceaccount.com
 GCP_WORKLOAD_IDENTITY_PROVIDER=projects/752311509951/locations/global/workloadIdentityPools/github-actions-pool/providers/github
+JWT_SECRET_NAME=queryshield_jwt_secret
+GEMINI_API_KEY_SECRET_NAME=queryshield_gemini_api_key
 ```
 
 Set `BIGQUERY_DATASET_ID` to the existing dataset name. The app default is `queryshield_demo`, but the existing GCP dataset should be reused rather than duplicated.
@@ -62,20 +64,25 @@ MAX_BYTES_BILLED
 QUERY_RESULT_ROW_LIMIT
 QUERY_TIMEOUT_SECONDS
 GEMINI_MODEL
+AI_SUMMARY_ENABLED
+SUMMARY_MAX_ROWS
+SUMMARY_MAX_CHARS
+JWT_SECRET_NAME
+GEMINI_API_KEY_SECRET_NAME
 ```
 
-Do not store `JWT_SECRET_KEY`, `GEMINI_API_KEY`, or service-account JSON in GitHub variables or repository files.
+Do not store `JWT_SECRET_KEY`, `GEMINI_API_KEY`, service-account JSON, database passwords, or local `.env` contents in GitHub variables or repository files.
 
 ## Required Secret Manager Secrets
 
 The backend Cloud Run service maps these Secret Manager secrets to environment variables:
 
 ```text
-JWT_SECRET_KEY <- queryshield-jwt-secret:latest
-GEMINI_API_KEY <- queryshield-gemini-api-key:latest
+JWT_SECRET_KEY <- queryshield_jwt_secret:latest
+GEMINI_API_KEY <- queryshield_gemini_api_key:latest
 ```
 
-Secret values are not committed, printed, or baked into Docker images.
+Secret values are not committed, printed, or baked into Docker images. The workflow supports alternate secret names through `JWT_SECRET_NAME` and `GEMINI_API_KEY_SECRET_NAME` repository variables.
 
 ## Service Accounts And IAM
 
@@ -95,6 +102,14 @@ queryshield-backend-sa@queryshield-501723.iam.gserviceaccount.com
 
 That runtime service account needs access to the existing BigQuery dataset, BigQuery job creation, the `queryshield_ai` bucket, Secret Manager secret access for the two mapped secrets, and Cloud Logging.
 
+Minimum practical IAM for the backend runtime service account:
+
+- BigQuery job user on the project.
+- BigQuery data editor or narrower dataset-level access on the target dataset.
+- Storage object admin or a narrower object role on the upload bucket.
+- Secret Manager secret accessor for the mapped runtime secrets.
+- Logs writer, normally granted by Cloud Run runtime defaults.
+
 Do not grant broad Owner or Editor roles for the demo.
 
 ## Deployment Workflow
@@ -105,18 +120,19 @@ The deploy workflow is:
 .github/workflows/deploy-gcp.yml
 ```
 
-It runs on manual dispatch and pushes to `main`. It performs this order:
+It runs on manual dispatch and pushes to `dev`. It performs this order:
 
-1. Authenticate to GCP with Workload Identity Federation.
-2. Configure Docker auth for Artifact Registry.
-3. Build and push the backend image.
-4. Deploy the backend to Cloud Run with SQLite demo mode, Secret Manager mappings, GCS uploads, BigQuery settings, min instances 0, and max instances 1.
-5. Capture the backend URL.
-6. Build and push the frontend image with `NEXT_PUBLIC_API_BASE_URL` set to the backend URL.
-7. Deploy the frontend to Cloud Run with min instances 0 and max instances 1.
-8. Capture the frontend URL.
-9. Update backend `FRONTEND_ORIGINS` to the exact frontend URL.
-10. Verify `GET /health` on the backend and `GET /` on the frontend.
+1. Validate required deployment configuration.
+2. Authenticate to GCP with Workload Identity Federation.
+3. Configure Docker auth for Artifact Registry.
+4. Build and push the backend image.
+5. Deploy the backend to Cloud Run with SQLite demo mode, Secret Manager mappings, GCS uploads, BigQuery settings, min instances 0, and max instances 1.
+6. Capture the backend URL.
+7. Build and push the frontend image with `NEXT_PUBLIC_API_BASE_URL` set to the backend URL.
+8. Deploy the frontend to Cloud Run with min instances 0 and max instances 1.
+9. Capture the frontend URL.
+10. Update backend `FRONTEND_ORIGINS` to the exact frontend URL.
+11. Verify `GET /health` on the backend and `GET /` on the frontend.
 
 Image names use Artifact Registry paths like:
 
@@ -144,6 +160,9 @@ GEMINI_MODEL=gemini-2.5-flash
 MAX_BYTES_BILLED=100000000
 QUERY_RESULT_ROW_LIMIT=100
 QUERY_TIMEOUT_SECONDS=30
+AI_SUMMARY_ENABLED=true
+SUMMARY_MAX_ROWS=25
+SUMMARY_MAX_CHARS=6000
 ```
 
 Frontend Cloud Run environment and build arg:
@@ -175,9 +194,11 @@ Manual MVP checks:
 10. Dry run returns an estimate.
 11. Query execution works when eligible.
 12. Results display.
-13. Query history appears during the same Cloud Run instance lifetime.
-14. Audit logs appear during the same Cloud Run instance lifetime.
-15. Restarting/replacing the backend may reset SQLite data.
+13. AI summary displays when enabled and Gemini succeeds, or a safe fallback appears.
+14. Compatible results display a chart without issuing another query.
+15. Query history appears during the same Cloud Run instance lifetime.
+16. Audit logs appear during the same Cloud Run instance lifetime.
+17. Restarting or replacing the backend may reset SQLite metadata.
 
 ## Cost Controls
 
@@ -192,7 +213,7 @@ No GKE
 No load balancer
 ```
 
-Budget alerts are already created. After the demo, delete Cloud Run services if not needed, remove old Artifact Registry images, delete Cloud Storage test files, and remove BigQuery test tables created for the recording.
+Budget alerts should be configured in the GCP project. After the demo, delete Cloud Run services if not needed, remove old Artifact Registry images, delete Cloud Storage test files, and remove BigQuery test tables created for the recording.
 
 ## Cleanup
 

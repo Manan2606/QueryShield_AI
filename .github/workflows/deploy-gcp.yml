@@ -10,6 +10,10 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: deploy-gcp-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'queryshield-501723' }}
   GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
@@ -17,12 +21,19 @@ env:
   BACKEND_SERVICE: ${{ vars.BACKEND_SERVICE || 'queryshield-backend' }}
   FRONTEND_SERVICE: ${{ vars.FRONTEND_SERVICE || 'queryshield-frontend' }}
   BACKEND_SERVICE_ACCOUNT: ${{ vars.BACKEND_SERVICE_ACCOUNT || 'queryshield-backend-sa@queryshield-501723.iam.gserviceaccount.com' }}
+  GCP_DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT || 'queryshield-github-deploy-sa@queryshield-501723.iam.gserviceaccount.com' }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER || 'projects/752311509951/locations/global/workloadIdentityPools/github-actions-pool/providers/github' }}
   GCS_UPLOAD_BUCKET: ${{ vars.GCS_UPLOAD_BUCKET || 'queryshield_ai' }}
   BIGQUERY_DATASET_ID: ${{ vars.BIGQUERY_DATASET_ID || 'queryshield_demo' }}
   MAX_BYTES_BILLED: ${{ vars.MAX_BYTES_BILLED || '100000000' }}
   QUERY_RESULT_ROW_LIMIT: ${{ vars.QUERY_RESULT_ROW_LIMIT || '100' }}
   QUERY_TIMEOUT_SECONDS: ${{ vars.QUERY_TIMEOUT_SECONDS || '30' }}
   GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+  AI_SUMMARY_ENABLED: ${{ vars.AI_SUMMARY_ENABLED || 'true' }}
+  SUMMARY_MAX_ROWS: ${{ vars.SUMMARY_MAX_ROWS || '25' }}
+  SUMMARY_MAX_CHARS: ${{ vars.SUMMARY_MAX_CHARS || '6000' }}
+  JWT_SECRET_NAME: ${{ vars.JWT_SECRET_NAME || 'queryshield_jwt_secret' }}
+  GEMINI_API_KEY_SECRET_NAME: ${{ vars.GEMINI_API_KEY_SECRET_NAME || 'queryshield_gemini_api_key' }}
   BACKEND_IMAGE_NAME: queryshield-backend
   FRONTEND_IMAGE_NAME: queryshield-frontend
 
@@ -35,11 +46,36 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_vars=(
+            GCP_PROJECT_ID
+            GCP_REGION
+            ARTIFACT_REGISTRY_REPO
+            BACKEND_SERVICE
+            FRONTEND_SERVICE
+            BACKEND_SERVICE_ACCOUNT
+            GCP_DEPLOY_SERVICE_ACCOUNT
+            GCP_WORKLOAD_IDENTITY_PROVIDER
+            GCS_UPLOAD_BUCKET
+            BIGQUERY_DATASET_ID
+            JWT_SECRET_NAME
+            GEMINI_API_KEY_SECRET_NAME
+          )
+          for name in "${required_vars[@]}"; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing required deployment value: $name" >&2
+              exit 1
+            fi
+          done
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER || 'projects/752311509951/locations/global/workloadIdentityPools/github-actions-pool/providers/github' }}
-          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT || 'queryshield-github-deploy-sa@queryshield-501723.iam.gserviceaccount.com' }}
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOY_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v2
@@ -71,8 +107,8 @@ jobs:
             --max-instances 1 \
             --memory 1Gi \
             --cpu 1 \
-            --set-env-vars "^|^APP_ENV=production|DATABASE_URL=sqlite:////tmp/queryshield.db|GCP_PROJECT_ID=$GCP_PROJECT_ID|GCP_REGION=$GCP_REGION|BIGQUERY_DATASET_ID=$BIGQUERY_DATASET_ID|STORAGE_BACKEND=gcs|GCS_UPLOAD_BUCKET=$GCS_UPLOAD_BUCKET|FRONTEND_ORIGINS=https://placeholder.invalid|GEMINI_MODEL=$GEMINI_MODEL|MAX_BYTES_BILLED=$MAX_BYTES_BILLED|QUERY_RESULT_ROW_LIMIT=$QUERY_RESULT_ROW_LIMIT|QUERY_TIMEOUT_SECONDS=$QUERY_TIMEOUT_SECONDS" \
-            --set-secrets "JWT_SECRET_KEY=queryshield_jwt_secret:latest,GEMINI_API_KEY=queryshield_gemini_api_key:latest"
+            --set-env-vars "^|^APP_ENV=production|DATABASE_URL=sqlite:////tmp/queryshield.db|GCP_PROJECT_ID=$GCP_PROJECT_ID|GCP_REGION=$GCP_REGION|BIGQUERY_DATASET_ID=$BIGQUERY_DATASET_ID|STORAGE_BACKEND=gcs|GCS_UPLOAD_BUCKET=$GCS_UPLOAD_BUCKET|FRONTEND_ORIGINS=https://placeholder.invalid|GEMINI_MODEL=$GEMINI_MODEL|MAX_BYTES_BILLED=$MAX_BYTES_BILLED|QUERY_RESULT_ROW_LIMIT=$QUERY_RESULT_ROW_LIMIT|QUERY_TIMEOUT_SECONDS=$QUERY_TIMEOUT_SECONDS|AI_SUMMARY_ENABLED=$AI_SUMMARY_ENABLED|SUMMARY_MAX_ROWS=$SUMMARY_MAX_ROWS|SUMMARY_MAX_CHARS=$SUMMARY_MAX_CHARS" \
+            --set-secrets "JWT_SECRET_KEY=$JWT_SECRET_NAME:latest,GEMINI_API_KEY=$GEMINI_API_KEY_SECRET_NAME:latest"
 
       - name: Capture backend URL
         run: |
@@ -129,5 +165,7 @@ jobs:
             echo "Backend image: $BACKEND_IMAGE_URI"
             echo "Frontend image: $FRONTEND_IMAGE_URI"
             echo "CORS updated to: $FRONTEND_URL"
+            echo "Upload storage: gs://$GCS_UPLOAD_BUCKET"
+            echo "BigQuery dataset: $BIGQUERY_DATASET_ID"
             echo "MVP-1 database: sqlite:////tmp/queryshield.db"
           } >> "$GITHUB_STEP_SUMMARY"

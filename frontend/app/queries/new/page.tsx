@@ -253,8 +253,8 @@ function NewQueryContent({ token }: { token: string }) {
       {execution ? (
         <div className="space-y-6">
           <AnalysisResultHeader execution={execution} question={question} />
-          <AiSummaryCard />
-          <ResultChart execution={execution} />
+          <AiSummaryCard error={execution.ai_summary_error} status={execution.ai_summary_status} summary={execution.ai_summary} />
+          <ResultChart execution={execution} question={question} />
           <section className="app-surface p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-base font-bold text-slate-950">Result table</h3>

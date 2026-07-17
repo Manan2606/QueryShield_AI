@@ -1,24 +1,26 @@
 {
-  "name": "queryshield-ai-frontend",
-  "version": "0.1.0",
-  "private": true,
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
-  },
-  "dependencies": {
-    "next": "latest",
-    "react": "latest",
-    "react-dom": "latest"
-  },
-  "devDependencies": {
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
-    "autoprefixer": "^10.4.21",
-    "postcss": "^8.5.6",
-    "tailwindcss": "^3.4.17",
-    "typescript": "latest"
-  }
+    "name":  "queryshield-ai-frontend",
+    "version":  "0.1.0",
+    "private":  true,
+    "scripts":  {
+                    "dev":  "next dev",
+                    "build":  "next build",
+                    "start":  "next start",
+                    "test:charts":  "node tests/chartInference.test.mjs"
+                },
+    "dependencies":  {
+                         "next":  "latest",
+                         "react":  "latest",
+                         "react-dom":  "latest",
+                         "recharts":  "^3.9.2"
+                     },
+    "devDependencies":  {
+                            "@types/node":  "latest",
+                            "@types/react":  "latest",
+                            "@types/react-dom":  "latest",
+                            "autoprefixer":  "^10.4.21",
+                            "postcss":  "^8.5.6",
+                            "tailwindcss":  "^3.4.17",
+                            "typescript":  "latest"
+                        }
 }

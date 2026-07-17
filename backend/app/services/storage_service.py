@@ -76,6 +76,8 @@ class GCSUploadStorage(UploadStorage):
             raise UploadStorageError(
                 "google-cloud-storage is not installed. Install backend requirements before using GCS uploads."
             ) from exc
+        if settings.GOOGLE_APPLICATION_CREDENTIALS:
+            os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", settings.GOOGLE_APPLICATION_CREDENTIALS)
         return storage.Client(project=settings.GCP_PROJECT_ID or None)
 
     def save_upload(self, file: UploadFile, dataset_id: int) -> StoredUpload:
@@ -91,23 +93,34 @@ class GCSUploadStorage(UploadStorage):
             temp_file.write(contents)
             analysis_path = temp_file.name
 
-        bucket = self._client().bucket(self.bucket_name)
-        blob = bucket.blob(object_name)
-        blob.upload_from_filename(analysis_path, content_type=file.content_type or "text/csv")
+        try:
+            bucket = self._client().bucket(self.bucket_name)
+            blob = bucket.blob(object_name)
+            blob.upload_from_filename(analysis_path, content_type=file.content_type or "text/csv")
+        except Exception as exc:
+            self.cleanup_local_path(analysis_path)
+            raise UploadStorageError(f"Failed to upload CSV to Cloud Storage bucket '{self.bucket_name}': {exc}") from exc
 
         return StoredUpload(file.filename or Path(object_name).name, storage_path, analysis_path)
 
     def exists(self, storage_path: str) -> bool:
         bucket_name, object_name = parse_gcs_uri(storage_path)
-        bucket = self._client().bucket(bucket_name)
-        return bucket.blob(object_name).exists()
+        try:
+            bucket = self._client().bucket(bucket_name)
+            return bucket.blob(object_name).exists()
+        except Exception as exc:
+            raise UploadStorageError(f"Failed to check Cloud Storage object '{storage_path}': {exc}") from exc
 
     def local_path_for_read(self, storage_path: str) -> str:
         bucket_name, object_name = parse_gcs_uri(storage_path)
         with NamedTemporaryFile(delete=False, suffix=Path(object_name).suffix or ".csv") as temp_file:
             temp_path = temp_file.name
-        bucket = self._client().bucket(bucket_name)
-        bucket.blob(object_name).download_to_filename(temp_path)
+        try:
+            bucket = self._client().bucket(bucket_name)
+            bucket.blob(object_name).download_to_filename(temp_path)
+        except Exception as exc:
+            self.cleanup_local_path(temp_path)
+            raise UploadStorageError(f"Failed to download Cloud Storage object '{storage_path}': {exc}") from exc
         return temp_path
 
     def cleanup_local_path(self, local_path: str) -> None:

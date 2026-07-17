@@ -12,6 +12,7 @@ from app.models.dataset import Dataset
 from app.models.dataset_column import DatasetColumn
 from app.models.query_request import QueryRequest
 from app.services.bigquery_service import BigQueryExecutionTimeout, execute_query
+from app.services.result_summary_service import generate_result_summary
 from app.services.sql_validation_service import SQLValidatorInternalError, validate_generated_sql
 
 
@@ -67,6 +68,56 @@ def _safe_error_message(exc: Exception) -> str:
         return "BigQuery execution failed because of a network issue."
     return "BigQuery execution failed."
 
+def _safe_summary_error(exc: Exception) -> str:
+    text = str(exc).lower()
+    if "api_key" in text or "api key" in text or "gemini_api_key" in text:
+        return "AI summary is not configured."
+    if "quota" in text:
+        return "AI summary could not be generated because a quota limit was reached."
+    if "network" in text or "connection" in text or "timeout" in text:
+        return "AI summary could not be generated because of a network issue."
+    if "disabled" in text:
+        return "AI result summaries are disabled."
+    return "AI summary could not be generated."
+
+
+def _attempt_ai_summary(
+    db: Session,
+    current_user_id: int,
+    query_request: QueryRequest,
+    dataset: Dataset,
+    rows: list[dict[str, Any]],
+    columns: list[dict[str, Any]],
+) -> None:
+    if not settings.AI_SUMMARY_ENABLED:
+        query_request.ai_summary = None
+        query_request.ai_summary_status = "disabled"
+        query_request.ai_summary_error = None
+        query_request.ai_summary_generated_at = None
+        return
+
+    _add_audit_log(db, current_user_id, "query.ai_summary_started", query_request.id, {"dataset_id": dataset.id, "result_row_count": len(rows)})
+    try:
+        summary = generate_result_summary(
+            question=query_request.natural_language_question,
+            generated_sql=query_request.generated_sql or "",
+            rows=rows,
+            columns=[str(column.get("name")) for column in columns if column.get("name")],
+            row_count=len(rows),
+        )
+    except Exception as exc:
+        query_request.ai_summary = None
+        query_request.ai_summary_status = "failed"
+        query_request.ai_summary_error = _safe_summary_error(exc)
+        query_request.ai_summary_generated_at = None
+        _add_audit_log(db, current_user_id, "query.ai_summary_failed", query_request.id, {"dataset_id": dataset.id, "error": query_request.ai_summary_error})
+        return
+
+    query_request.ai_summary = summary
+    query_request.ai_summary_status = "completed"
+    query_request.ai_summary_error = None
+    query_request.ai_summary_generated_at = datetime.utcnow()
+    _add_audit_log(db, current_user_id, "query.ai_summary_completed", query_request.id, {"dataset_id": dataset.id, "result_row_count": len(rows), "empty_result": len(rows) == 0})
 
 def _load_owned_query(db: Session, current_user_id: int, query_request_id: int) -> QueryRequest:
     query_request = db.query(QueryRequest).filter(QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id).first()
@@ -222,6 +273,10 @@ def _to_response(query_request: QueryRequest, row_limit: int | None = None) -> d
         "execution_completed_at": query_request.execution_completed_at,
         "executed_at": query_request.executed_at,
         "generated_sql": query_request.generated_sql or "",
+        "ai_summary": query_request.ai_summary,
+        "ai_summary_status": query_request.ai_summary_status or "not_available",
+        "ai_summary_error": query_request.ai_summary_error,
+        "ai_summary_generated_at": query_request.ai_summary_generated_at,
     }
 
 
@@ -252,6 +307,10 @@ def execute_query_request(
     query_request.result_columns = None
     query_request.result_rows = None
     query_request.result_truncated = None
+    query_request.ai_summary = None
+    query_request.ai_summary_status = "not_available"
+    query_request.ai_summary_error = None
+    query_request.ai_summary_generated_at = None
     _add_audit_log(db, current_user_id, "query.execution_started", query_request.id, {"dataset_id": dataset.id, "row_limit": row_limit})
     db.commit()
     db.refresh(query_request)
@@ -294,6 +353,8 @@ def execute_query_request(
                 "execution_status": "succeeded",
             },
         )
+        _attempt_ai_summary(db, current_user_id, query_request, dataset, safe_rows, columns)
+
     except BigQueryExecutionTimeout as exc:
         completed_at = datetime.utcnow()
         query_request.execution_status = "timed_out"

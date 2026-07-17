@@ -9,7 +9,10 @@ from sqlalchemy.pool import StaticPool
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret")
 os.environ.setdefault("JWT_ALGORITHM", "HS256")
+os.environ.setdefault("STORAGE_BACKEND", "local")
+os.environ.setdefault("GCS_UPLOAD_BUCKET", "")
 
+from app.core.config import settings
 from app.db import database
 from app.main import app
 from app.models.dataset import Dataset
@@ -18,6 +21,8 @@ from app.models.dataset_column import DatasetColumn
 
 @pytest.fixture()
 def client():
+    settings.STORAGE_BACKEND = "local"
+    settings.GCS_UPLOAD_BUCKET = ""
     engine = create_engine(
         "sqlite:///:memory:",
         connect_args={"check_same_thread": False},

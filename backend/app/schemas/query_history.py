@@ -28,6 +28,8 @@ class QueryHistoryItem(BaseModel):
     validated_at: datetime | None
     dry_run_at: datetime | None
     executed_at: datetime | None
+    ai_summary: str | None
+    ai_summary_status: str
 
 
 class QueryHistoryListResponse(BaseModel):
@@ -100,6 +102,10 @@ class QueryExecutionSection(BaseModel):
     execution_started_at: datetime | None
     execution_completed_at: datetime | None
     executed_at: datetime | None
+    ai_summary: str | None
+    ai_summary_status: str
+    ai_summary_error: str | None
+    ai_summary_generated_at: datetime | None
 
 
 class QueryAuditSummary(BaseModel):

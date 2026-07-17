@@ -42,6 +42,10 @@ function executionFromLifecycle(lifecycle: QueryLifecycleResponse): QueryExecuti
     execution_completed_at: lifecycle.execution.execution_completed_at,
     executed_at: lifecycle.execution.executed_at,
     generated_sql: lifecycle.generation.generated_sql || "",
+    ai_summary: lifecycle.execution.ai_summary,
+    ai_summary_status: lifecycle.execution.ai_summary_status,
+    ai_summary_error: lifecycle.execution.ai_summary_error,
+    ai_summary_generated_at: lifecycle.execution.ai_summary_generated_at,
   };
 }
 
@@ -153,8 +157,8 @@ function QueryDetailContent({ token, queryId }: { token: string; queryId: number
       {execution ? (
         <>
           <AnalysisResultHeader execution={execution} question={lifecycle.query.question} />
-          <AiSummaryCard />
-          <ResultChart execution={execution} />
+          <AiSummaryCard error={execution.ai_summary_error} status={execution.ai_summary_status} summary={execution.ai_summary} />
+          <ResultChart execution={execution} question={lifecycle.query.question} />
           <section className="app-surface p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <h3 className="text-base font-bold text-slate-950">Result table</h3>

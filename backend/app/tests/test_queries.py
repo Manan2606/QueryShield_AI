@@ -20,6 +20,7 @@ from app.models.dataset import Dataset
 from app.models.dataset_column import DatasetColumn
 from app.models.query_request import QueryRequest
 from app.services.bigquery_service import BigQueryExecutionTimeout, QueryExecutionResult, QueryResultColumn
+from app.services.result_summary_service import EMPTY_RESULT_SUMMARY, ResultSummaryError
 
 
 @pytest.fixture()
@@ -1200,6 +1201,93 @@ def test_successful_execution_stores_metadata_bounded_rows_and_json_safe_values(
     assert stored.result_row_count == 2
 
 
+def test_successful_execution_generates_and_stores_ai_summary(monkeypatch, client):
+    headers, user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-summary@example.com")
+    observed = {}
+
+    monkeypatch.setattr("app.services.query_execution_service.execute_query", lambda *args, **kwargs: _fake_execution_result())
+
+    def fake_summary(question, generated_sql, rows, columns=None, row_count=None):
+        observed["question"] = question
+        observed["rows"] = rows
+        observed["columns"] = columns
+        observed["row_count"] = row_count
+        return "South has the highest returned sales total at 1849.25."
+
+    monkeypatch.setattr("app.services.query_execution_service.generate_result_summary", fake_summary)
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["execution_status"] == "succeeded"
+    assert payload["ai_summary_status"] == "completed"
+    assert payload["ai_summary"] == "South has the highest returned sales total at 1849.25."
+    assert payload["ai_summary_error"] is None
+    assert observed["rows"] == [{"region": "South", "total_sales": "1849.25"}]
+    assert observed["columns"] == ["region", "total_sales"]
+    assert observed["row_count"] == 1
+
+    stored = _stored_query_request(query_request_id)
+    assert stored.ai_summary_status == "completed"
+    assert stored.ai_summary == payload["ai_summary"]
+    assert stored.ai_summary_generated_at is not None
+
+    db = database.SessionLocal()
+    try:
+        actions = [
+            log.action
+            for log in db.query(AuditLog).filter(AuditLog.user_id == user_id, AuditLog.resource_id == str(query_request_id)).all()
+        ]
+    finally:
+        db.close()
+    assert "query.ai_summary_started" in actions
+    assert "query.ai_summary_completed" in actions
+
+
+def test_empty_execution_rows_use_deterministic_ai_summary_without_gemini(monkeypatch, client):
+    headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-empty-summary@example.com")
+    monkeypatch.setattr("app.services.query_execution_service.execute_query", lambda *args, **kwargs: _fake_execution_result(rows=[]))
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["execution_status"] == "succeeded"
+    assert payload["result_rows"] == []
+    assert payload["ai_summary_status"] == "completed"
+    assert payload["ai_summary"] == EMPTY_RESULT_SUMMARY
+
+
+def test_ai_summary_failure_does_not_fail_query_execution(monkeypatch, client):
+    headers, user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-summary-fail@example.com")
+    monkeypatch.setattr("app.services.query_execution_service.execute_query", lambda *args, **kwargs: _fake_execution_result())
+
+    def fail_summary(*args, **kwargs):
+        raise ResultSummaryError("Gemini API key leaked path C:/secret/key.json")
+
+    monkeypatch.setattr("app.services.query_execution_service.generate_result_summary", fail_summary)
+
+    response = client.post(f"/queries/{query_request_id}/execute", headers=headers)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["execution_status"] == "succeeded"
+    assert payload["result_rows"] == [{"region": "South", "total_sales": "1849.25"}]
+    assert payload["ai_summary"] is None
+    assert payload["ai_summary_status"] == "failed"
+    assert payload["ai_summary_error"] == "AI summary is not configured."
+    assert "key.json" not in payload["ai_summary_error"]
+
+    db = database.SessionLocal()
+    try:
+        actions = [
+            log.action
+            for log in db.query(AuditLog).filter(AuditLog.user_id == user_id, AuditLog.resource_id == str(query_request_id)).all()
+        ]
+    finally:
+        db.close()
+    assert "query.ai_summary_failed" in actions
 def test_requested_row_limit_cannot_exceed_server_max(monkeypatch, client):
     headers, _user_id, _dataset_id, query_request_id = _execution_ready_query(client, "execute-rowlimit@example.com")
     monkeypatch.setattr("app.services.query_execution_service.settings.QUERY_RESULT_ROW_LIMIT", 5)

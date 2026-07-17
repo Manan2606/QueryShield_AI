@@ -14,7 +14,7 @@ from app.services.audit_service import create_audit_log
 from app.services.bigquery_service import get_bigquery_table_info as fetch_bigquery_table_info
 from app.services.bigquery_service import load_csv_to_bigquery
 from app.services.csv_service import analyze_csv, preview_csv, save_upload_file, validate_csv_file
-from app.services.storage_service import get_upload_storage
+from app.services.storage_service import UploadStorageError, get_upload_storage
 from app.services.dataset_service import (
     DatasetDeletionBlocked,
     create_dataset,
@@ -132,6 +132,10 @@ def upload_csv(
         dataset.status = "failed"
         db.commit()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except UploadStorageError as exc:
+        dataset.status = "failed"
+        db.commit()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
     db.query(DatasetColumn).filter(DatasetColumn.dataset_id == dataset.id).delete(synchronize_session=False)
 
@@ -195,7 +199,10 @@ def preview_dataset_csv(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No CSV file uploaded for this dataset")
 
     storage = get_upload_storage()
-    preview_path = storage.local_path_for_read(dataset.storage_path)
+    try:
+        preview_path = storage.local_path_for_read(dataset.storage_path)
+    except UploadStorageError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     try:
         preview = preview_csv(preview_path, limit=settings.CSV_PREVIEW_ROWS)
     finally:
@@ -216,7 +223,11 @@ def load_dataset_to_bigquery(
     if not dataset.storage_path:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No CSV file uploaded for this dataset")
     storage = get_upload_storage()
-    if not storage.exists(dataset.storage_path):
+    try:
+        storage_exists = storage.exists(dataset.storage_path)
+    except UploadStorageError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    if not storage_exists:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded CSV file was not found")
 
     columns = (

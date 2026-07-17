@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend-ci:
     name: Backend CI
@@ -33,18 +37,24 @@ jobs:
 
       - name: Validate migrations with SQLite
         env:
+          APP_ENV: ci
           DATABASE_URL: sqlite:///./ci_queryshield.db
           JWT_SECRET_KEY: ci-only-secret
           GEMINI_API_KEY: ""
           GCP_PROJECT_ID: ""
+          STORAGE_BACKEND: local
+          AI_SUMMARY_ENABLED: "false"
         run: python -m alembic upgrade head
 
       - name: Run backend tests
         env:
+          APP_ENV: ci
           DATABASE_URL: sqlite:///./ci_queryshield.db
           JWT_SECRET_KEY: ci-only-secret
           GEMINI_API_KEY: ""
           GCP_PROJECT_ID: ""
+          STORAGE_BACKEND: local
+          AI_SUMMARY_ENABLED: "false"
         run: python -m pytest
 
   frontend-ci:
@@ -76,14 +86,8 @@ jobs:
             echo "No frontend lint script configured; skipping."
           fi
 
-      - name: Run frontend tests if configured
-        shell: bash
-        run: |
-          if npm run | grep -q "  test"; then
-            npm test
-          else
-            echo "No frontend test script configured; skipping."
-          fi
+      - name: Run chart inference tests
+        run: npm run test:charts
 
       - name: Build frontend
         env:

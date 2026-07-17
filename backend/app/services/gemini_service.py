@@ -1,4 +1,5 @@
 import re
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -8,6 +9,10 @@ from app.core.config import settings
 class GeminiGenerationError(RuntimeError):
     pass
 
+def _is_retryable_gemini_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    class_name = exc.__class__.__name__.lower()
+    return "503" in text or "unavailable" in text or "high demand" in text or "timeout" in text or "server" in class_name
 
 class DatasetColumnLike(Protocol):
     name: str
@@ -112,11 +117,21 @@ def generate_bigquery_sql(table_id: str, columns: list[DatasetColumnLike], quest
         raise GeminiGenerationError("google-genai SDK is not installed") from exc
 
     prompt = build_sql_generation_prompt(table_id, columns, question)
-    try:
-        client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        response = client.models.generate_content(model=settings.GEMINI_MODEL, contents=prompt)
-    except Exception as exc:
-        raise GeminiGenerationError("Gemini SQL generation failed") from exc
+    client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(model=settings.GEMINI_MODEL, contents=prompt)
+            break
+        except Exception as exc:
+            last_error = exc
+            if attempt == 2 or not _is_retryable_gemini_error(exc):
+                if "high demand" in str(exc).lower() or "503" in str(exc).lower() or "unavailable" in str(exc).lower():
+                    raise GeminiGenerationError("Gemini is temporarily overloaded. Please retry in a moment.") from exc
+                raise GeminiGenerationError("Gemini SQL generation failed") from exc
+            time.sleep(1 + attempt)
+    else:
+        raise GeminiGenerationError("Gemini SQL generation failed") from last_error
 
     text = getattr(response, "text", None)
     if not text:

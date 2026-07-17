@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./storage/uploads"
     MAX_UPLOAD_SIZE_MB: int = 20
     CSV_PREVIEW_ROWS: int = 10
+    AI_SUMMARY_ENABLED: bool = True
+    SUMMARY_MAX_ROWS: int = 25
+    SUMMARY_MAX_CHARS: int = 6000
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -46,7 +49,7 @@ class Settings(BaseSettings):
     def use_gcs_uploads(self) -> bool:
         return self.STORAGE_BACKEND.lower() == "gcs"
 
-    @field_validator("MAX_BYTES_BILLED", "QUERY_RESULT_ROW_LIMIT", "QUERY_TIMEOUT_SECONDS")
+    @field_validator("MAX_BYTES_BILLED", "QUERY_RESULT_ROW_LIMIT", "QUERY_TIMEOUT_SECONDS", "SUMMARY_MAX_ROWS", "SUMMARY_MAX_CHARS")
     @classmethod
     def positive_int(cls, value: int) -> int:
         if value <= 0:

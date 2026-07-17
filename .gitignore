@@ -25,6 +25,9 @@ ENV/
 .env
 .env.*
 !.env.example
+!.env.gcp.example
+!backend/.env.example
+!backend/.env.gcp.example
 *.pem
 *.key
 *.crt

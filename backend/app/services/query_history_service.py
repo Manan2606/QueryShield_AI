@@ -79,6 +79,8 @@ def _history_item(query_request: QueryRequest) -> dict[str, Any]:
         "validated_at": query_request.validated_at,
         "dry_run_at": query_request.dry_run_at,
         "executed_at": query_request.executed_at,
+        "ai_summary": query_request.ai_summary,
+        "ai_summary_status": query_request.ai_summary_status or "not_available",
     }
 
 
@@ -225,6 +227,10 @@ def get_query_lifecycle(db: Session, current_user_id: int, query_request_id: int
             "execution_started_at": query_request.execution_started_at,
             "execution_completed_at": query_request.execution_completed_at,
             "executed_at": query_request.executed_at,
+            "ai_summary": query_request.ai_summary,
+            "ai_summary_status": query_request.ai_summary_status or "not_available",
+            "ai_summary_error": query_request.ai_summary_error,
+            "ai_summary_generated_at": query_request.ai_summary_generated_at,
         },
         "audit_summary": {
             "total_events": audit_count,

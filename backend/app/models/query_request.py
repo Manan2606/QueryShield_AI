@@ -50,6 +50,10 @@ class QueryRequest(Base):
     result_columns: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
     result_rows: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
     result_truncated: Mapped[bool | None] = mapped_column(nullable=True)
+    ai_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_summary_status: Mapped[str] = mapped_column(String, nullable=False, default="not_available")
+    ai_summary_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_summary_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

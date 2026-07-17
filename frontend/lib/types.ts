@@ -163,6 +163,10 @@ export type QueryExecutionResponse = {
   execution_completed_at: string | null;
   executed_at: string | null;
   generated_sql: string;
+  ai_summary: string | null;
+  ai_summary_status: string;
+  ai_summary_error: string | null;
+  ai_summary_generated_at: string | null;
 };
 
 export type QueryDryRunResponse = {
@@ -226,6 +230,8 @@ export type QueryHistoryItem = {
   validated_at: string | null;
   dry_run_at: string | null;
   executed_at: string | null;
+  ai_summary: string | null;
+  ai_summary_status: string;
 };
 
 export type QueryHistoryListResponse = {
@@ -295,6 +301,10 @@ export type QueryLifecycleResponse = {
     execution_started_at: string | null;
     execution_completed_at: string | null;
     executed_at: string | null;
+    ai_summary: string | null;
+    ai_summary_status: string;
+    ai_summary_error: string | null;
+    ai_summary_generated_at: string | null;
   };
   audit_summary: {
     total_events: number;
