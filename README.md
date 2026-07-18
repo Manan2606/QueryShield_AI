@@ -71,6 +71,15 @@ Main components:
 
 See [docs/architecture.md](docs/architecture.md) for application architecture and trust boundaries. See [docs/gcp-architecture.md](docs/gcp-architecture.md) for the GCP service map, deployment architecture, and CI/CD diagrams.
 
+## Demo Evidence
+
+The final demo recording and screenshots are stored in `docs/`:
+
+- [Demo walkthrough video](docs/QueryShield_AI_Recording_Video.mp4)
+- [Demo screenshots and flow notes](docs/demo-walkthrough.md)
+
+The screenshots cover authentication, dashboard, CSV upload, schema preview, SQL validation, AI summary/chart output, query history, and audit logs.
+
 ## Tech Stack
 
 Frontend:
@@ -127,6 +136,9 @@ queryshield-ai/
 |   |-- .env.example
 |   `-- README.md
 |-- docs/
+|   |-- screenshots/
+|   |-- demo-walkthrough.md
+|   `-- QueryShield_AI_Recording_Video.mp4
 |-- compose.yaml
 |-- CONTRIBUTING.md
 |-- README.md
@@ -329,11 +341,11 @@ QueryShield AI is an MVP with a defense-in-depth design, not a claim of perfect 
 - BigQuery loading, dry run, and controlled execution working
 - AI result summaries implemented after controlled execution
 - Charts implemented from bounded query result rows
+- Demo recording and screenshots added under `docs/`
 - Local generated files, uploaded CSV copies, DB files, caches, and build outputs are ignored and cleaned before push
 
 ## Roadmap
 
-- Demo video
 - Resume update
 - Harden browser session handling with secure HTTP-only cookies
 
