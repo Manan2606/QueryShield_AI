@@ -9,10 +9,18 @@ from app.core.config import settings
 class GeminiGenerationError(RuntimeError):
     pass
 
+
 def _is_retryable_gemini_error(exc: Exception) -> bool:
     text = str(exc).lower()
     class_name = exc.__class__.__name__.lower()
-    return "503" in text or "unavailable" in text or "high demand" in text or "timeout" in text or "server" in class_name
+    return (
+        "503" in text
+        or "unavailable" in text
+        or "high demand" in text
+        or "timeout" in text
+        or "server" in class_name
+    )
+
 
 class DatasetColumnLike(Protocol):
     name: str
@@ -38,8 +46,12 @@ class SqlValidationResult:
     sql: str
 
 
-def build_sql_generation_prompt(table_id: str, columns: list[DatasetColumnLike], question: str) -> str:
-    column_lines = "\n".join(f"* {column.name}: {column.data_type}" for column in columns)
+def build_sql_generation_prompt(
+    table_id: str, columns: list[DatasetColumnLike], question: str
+) -> str:
+    column_lines = "\n".join(
+        f"* {column.name}: {column.data_type}" for column in columns
+    )
     return f"""You generate BigQuery Standard SQL for QueryShield AI.
 
 Rules:
@@ -76,7 +88,9 @@ def clean_generated_sql(raw_output: str) -> str:
     if not output:
         raise GeminiGenerationError("Gemini returned empty SQL")
 
-    fenced_match = re.search(r"```(?:sql)?\s*(.*?)```", output, flags=re.IGNORECASE | re.DOTALL)
+    fenced_match = re.search(
+        r"```(?:sql)?\s*(.*?)```", output, flags=re.IGNORECASE | re.DOTALL
+    )
     if fenced_match:
         output = fenced_match.group(1).strip()
     else:
@@ -98,16 +112,22 @@ def validate_generated_sql(sql: str, table_id: str) -> SqlValidationResult:
         raise GeminiGenerationError("Generated SQL must start with SELECT or WITH")
 
     if table_id not in normalized:
-        raise GeminiGenerationError("Generated SQL does not reference the selected BigQuery table")
+        raise GeminiGenerationError(
+            "Generated SQL does not reference the selected BigQuery table"
+        )
 
     for keyword in FORBIDDEN_SQL_KEYWORDS:
         if re.search(rf"\b{keyword}\b", normalized, flags=re.IGNORECASE):
-            raise GeminiGenerationError(f"Generated SQL contains forbidden keyword: {keyword}")
+            raise GeminiGenerationError(
+                f"Generated SQL contains forbidden keyword: {keyword}"
+            )
 
     return SqlValidationResult(sql=normalized)
 
 
-def generate_bigquery_sql(table_id: str, columns: list[DatasetColumnLike], question: str) -> str:
+def generate_bigquery_sql(
+    table_id: str, columns: list[DatasetColumnLike], question: str
+) -> str:
     if not settings.GEMINI_API_KEY:
         raise GeminiGenerationError("GEMINI_API_KEY is not configured")
 
@@ -121,13 +141,21 @@ def generate_bigquery_sql(table_id: str, columns: list[DatasetColumnLike], quest
     last_error: Exception | None = None
     for attempt in range(3):
         try:
-            response = client.models.generate_content(model=settings.GEMINI_MODEL, contents=prompt)
+            response = client.models.generate_content(
+                model=settings.GEMINI_MODEL, contents=prompt
+            )
             break
         except Exception as exc:
             last_error = exc
             if attempt == 2 or not _is_retryable_gemini_error(exc):
-                if "high demand" in str(exc).lower() or "503" in str(exc).lower() or "unavailable" in str(exc).lower():
-                    raise GeminiGenerationError("Gemini is temporarily overloaded. Please retry in a moment.") from exc
+                if (
+                    "high demand" in str(exc).lower()
+                    or "503" in str(exc).lower()
+                    or "unavailable" in str(exc).lower()
+                ):
+                    raise GeminiGenerationError(
+                        "Gemini is temporarily overloaded. Please retry in a moment."
+                    ) from exc
                 raise GeminiGenerationError("Gemini SQL generation failed") from exc
             time.sleep(1 + attempt)
     else:

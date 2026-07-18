@@ -33,7 +33,11 @@ def prepare_summary_payload(rows: list[dict]) -> SummaryPayload:
         if len(serialized) > max_chars:
             break
         safe_rows.append(candidate)
-    return SummaryPayload(rows=safe_rows, rows_json=json.dumps(safe_rows, ensure_ascii=True, default=str), source_row_count=len(rows))
+    return SummaryPayload(
+        rows=safe_rows,
+        rows_json=json.dumps(safe_rows, ensure_ascii=True, default=str),
+        source_row_count=len(rows),
+    )
 
 
 def build_result_summary_prompt(
@@ -45,7 +49,11 @@ def build_result_summary_prompt(
 ) -> str:
     payload = prepare_summary_payload(rows)
     column_text = ", ".join(columns or []) or "Not provided"
-    sql_text = _truncate_text(" ".join(generated_sql.split()), 1200) if generated_sql else "Not provided"
+    sql_text = (
+        _truncate_text(" ".join(generated_sql.split()), 1200)
+        if generated_sql
+        else "Not provided"
+    )
     return f"""You are summarizing the result of a governed analytics query.
 
 User question:
@@ -96,10 +104,14 @@ def generate_result_summary(
     except ImportError as exc:
         raise ResultSummaryError("google-genai SDK is not installed") from exc
 
-    prompt = build_result_summary_prompt(question, generated_sql, rows, columns, row_count)
+    prompt = build_result_summary_prompt(
+        question, generated_sql, rows, columns, row_count
+    )
     try:
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        response = client.models.generate_content(model=settings.GEMINI_MODEL, contents=prompt)
+        response = client.models.generate_content(
+            model=settings.GEMINI_MODEL, contents=prompt
+        )
     except Exception as exc:
         raise ResultSummaryError("Gemini result summary generation failed") from exc
 

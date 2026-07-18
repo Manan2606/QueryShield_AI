@@ -15,16 +15,16 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'queryshield-501723' }}
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
   GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
   ARTIFACT_REGISTRY_REPO: ${{ vars.ARTIFACT_REGISTRY_REPO || 'queryshield' }}
   BACKEND_SERVICE: ${{ vars.BACKEND_SERVICE || 'queryshield-backend' }}
   FRONTEND_SERVICE: ${{ vars.FRONTEND_SERVICE || 'queryshield-frontend' }}
-  BACKEND_SERVICE_ACCOUNT: ${{ vars.BACKEND_SERVICE_ACCOUNT || 'queryshield-backend-sa@queryshield-501723.iam.gserviceaccount.com' }}
-  GCP_DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT || 'queryshield-github-deploy-sa@queryshield-501723.iam.gserviceaccount.com' }}
-  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER || 'projects/752311509951/locations/global/workloadIdentityPools/github-actions-pool/providers/github' }}
-  GCS_UPLOAD_BUCKET: ${{ vars.GCS_UPLOAD_BUCKET || 'queryshield_ai' }}
-  BIGQUERY_DATASET_ID: ${{ vars.BIGQUERY_DATASET_ID || 'queryshield_demo' }}
+  BACKEND_SERVICE_ACCOUNT: ${{ vars.BACKEND_SERVICE_ACCOUNT }}
+  GCP_DEPLOY_SERVICE_ACCOUNT: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCS_UPLOAD_BUCKET: ${{ vars.GCS_UPLOAD_BUCKET }}
+  BIGQUERY_DATASET_ID: ${{ vars.BIGQUERY_DATASET_ID }}
   MAX_BYTES_BILLED: ${{ vars.MAX_BYTES_BILLED || '100000000' }}
   QUERY_RESULT_ROW_LIMIT: ${{ vars.QUERY_RESULT_ROW_LIMIT || '100' }}
   QUERY_TIMEOUT_SECONDS: ${{ vars.QUERY_TIMEOUT_SECONDS || '30' }}
@@ -157,9 +157,34 @@ jobs:
             --region "$GCP_REGION" \
             --update-env-vars "FRONTEND_ORIGINS=$FRONTEND_URL"
 
+      - name: Verify deployed signup and login flow
+        shell: bash
+        run: |
+          set -euo pipefail
+          SMOKE_EMAIL="deploy-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}@example.com"
+          SMOKE_PASSWORD="DeploySmoke-${GITHUB_RUN_ID}!Aa1"
+          curl --fail --show-error --silent \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"$SMOKE_EMAIL\",\"password\":\"$SMOKE_PASSWORD\",\"full_name\":\"Deploy Smoke\"}" \
+            "$BACKEND_URL/auth/signup" > /dev/null
+          TOKEN_RESPONSE="$(curl --fail --show-error --silent \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "username=$SMOKE_EMAIL" \
+            --data-urlencode "password=$SMOKE_PASSWORD" \
+            "$BACKEND_URL/auth/login")"
+          export TOKEN_RESPONSE
+          python - <<'PY'
+          import json
+          import os
+          payload = json.loads(os.environ["TOKEN_RESPONSE"])
+          assert payload.get("token_type") == "bearer"
+          assert payload.get("access_token")
+          PY
       - name: Verify deployed health endpoints
         run: |
           curl --fail --show-error --silent "$BACKEND_URL/health"
+          curl --fail --show-error --silent "$BACKEND_URL/health/db"
+          curl --fail --show-error --silent "$BACKEND_URL/ready"
           curl --fail --show-error --silent "$FRONTEND_URL" > /dev/null
           {
             echo "Backend image: $BACKEND_IMAGE_URI"

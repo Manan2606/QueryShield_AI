@@ -255,9 +255,9 @@ MVP-1 deployment is documented in [docs/gcp-mvp1-deployment.md](docs/gcp-mvp1-de
 - Workload Identity Federation for GitHub Actions deployment authentication
 - SQLite demo mode at `sqlite:////tmp/queryshield.db` for MVP-1 metadata only
 
-Cloud SQL is intentionally excluded from MVP-1. Cloud Run filesystem storage is ephemeral, so signup users, query history, audit logs, and dataset metadata can reset after restart. The backend deploy uses min instances `0` and max instances `1` to reduce cost and avoid multiple isolated SQLite databases.
+Cloud SQL is intentionally excluded from MVP-1. Cloud Run filesystem storage is ephemeral, so signup users, query history, audit logs, and dataset metadata can reset after restart. The backend runs Alembic migrations on production startup so a fresh SQLite file has the required tables and current migration revision before signup or query workflows run. For public demo reuse beyond a recorded MVP walkthrough, move metadata to a durable store such as Cloud SQL before inviting external users. The backend deploy uses min instances `0` and max instances `1` to reduce cost and avoid multiple isolated SQLite databases.
 
-The deployment workflow is `.github/workflows/deploy-gcp.yml`. It builds and pushes backend and frontend images to Artifact Registry, deploys both services to Cloud Run, maps `JWT_SECRET_KEY` and `GEMINI_API_KEY` from Secret Manager, captures service URLs, updates backend CORS to the exact frontend URL, and verifies health endpoints.
+The deployment workflow is `.github/workflows/deploy-gcp.yml`. It builds and pushes backend and frontend images to Artifact Registry, deploys both services to Cloud Run, maps `JWT_SECRET_KEY` and `GEMINI_API_KEY` from Secret Manager, captures service URLs, updates backend CORS to the exact frontend URL, and verifies service health, readiness, and database schema endpoints, then smoke-tests deployed signup and login.
 
 ## Environment Variables
 
@@ -287,6 +287,7 @@ Backend variables:
 - `UPLOAD_DIR`
 - `MAX_UPLOAD_SIZE_MB`
 - `CSV_PREVIEW_ROWS`
+- `MAX_CSV_COLUMNS`
 - `AI_SUMMARY_ENABLED`
 - `SUMMARY_MAX_ROWS`
 - `SUMMARY_MAX_CHARS`
@@ -334,7 +335,6 @@ QueryShield AI is an MVP with a defense-in-depth design, not a claim of perfect 
 
 - Demo video
 - Resume update
-- Post-MVP persistent production metadata store, such as Cloud SQL
 - Harden browser session handling with secure HTTP-only cookies
 
 ## Cost Awareness

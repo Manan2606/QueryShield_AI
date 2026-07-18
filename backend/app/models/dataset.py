@@ -24,7 +24,9 @@ class Dataset(Base):
     bigquery_table_id: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False, default="draft")
     load_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    loaded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    loaded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     column_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -46,4 +48,6 @@ class Dataset(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    query_requests = relationship("QueryRequest", back_populates="dataset", cascade="all, delete-orphan")
+    query_requests = relationship(
+        "QueryRequest", back_populates="dataset", cascade="all, delete-orphan"
+    )

@@ -1,26 +1,27 @@
 {
-    "name":  "queryshield-ai-frontend",
-    "version":  "0.1.0",
-    "private":  true,
-    "scripts":  {
-                    "dev":  "next dev",
-                    "build":  "next build",
-                    "start":  "next start",
-                    "test:charts":  "node tests/chartInference.test.mjs"
-                },
-    "dependencies":  {
-                         "next":  "latest",
-                         "react":  "latest",
-                         "react-dom":  "latest",
-                         "recharts":  "^3.9.2"
-                     },
-    "devDependencies":  {
-                            "@types/node":  "latest",
-                            "@types/react":  "latest",
-                            "@types/react-dom":  "latest",
-                            "autoprefixer":  "^10.4.21",
-                            "postcss":  "^8.5.6",
-                            "tailwindcss":  "^3.4.17",
-                            "typescript":  "latest"
-                        }
+  "name": "queryshield-ai-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test:charts": "node tests/chartInference.test.mjs"
+  },
+  "dependencies": {
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
+    "recharts": "^3.9.2"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.0",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17",
+    "typescript": "6.0.3"
+  }
 }

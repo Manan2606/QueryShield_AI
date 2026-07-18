@@ -6,6 +6,12 @@ import { FormEvent, useState } from "react";
 import * as api from "@/lib/api";
 import ErrorAlert from "@/components/mvp/ErrorAlert";
 
+const PASSWORD_REQUIREMENT = "Password must be at least 12 characters and include uppercase, lowercase, number, and symbol.";
+
+function passwordMeetsRequirement(value: string) {
+  return value.length >= 12 && /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value);
+}
+
 export default function SignupPage() {
   const router = useRouter();
   const [fullName, setFullName] = useState("");
@@ -18,8 +24,14 @@ export default function SignupPage() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    if (!passwordMeetsRequirement(password)) {
+      alert(PASSWORD_REQUIREMENT);
+      setError(null);
+      return;
+    }
     if (password !== confirmPassword) {
-      setError("Passwords must match.");
+      alert("Passwords must match.");
+      setError(null);
       return;
     }
     setLoading(true);
@@ -49,10 +61,11 @@ export default function SignupPage() {
               <input className="input-field" required type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
             </label>
             <label className="field-label">Password
-              <input className="input-field" required minLength={8} type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+              <input className="input-field" required minLength={12} type="password" value={password} onChange={(event) => setPassword(event.target.value)} aria-describedby="password-requirement" />
             </label>
+            <p id="password-requirement" className="text-xs font-semibold text-slate-600">At least 12 characters with uppercase, lowercase, number, and symbol.</p>
             <label className="field-label">Confirm password
-              <input className="input-field" required minLength={8} type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
+              <input className="input-field" required minLength={12} type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} />
             </label>
             <button className="btn-primary w-full" disabled={loading} type="submit">{loading ? "Creating account..." : "Create account"}</button>
           </form>

@@ -52,13 +52,13 @@ def client():
 def _auth_headers(client, email="dataset@example.com"):
     signup_response = client.post(
         "/auth/signup",
-        json={"email": email, "password": "password123", "full_name": "Dataset User"},
+        json={"email": email, "password": "Password123!", "full_name": "Dataset User"},
     )
     assert signup_response.status_code == 201
 
     login_response = client.post(
         "/auth/login",
-        data={"username": email, "password": "password123"},
+        data={"username": email, "password": "Password123!"},
     )
     assert login_response.status_code == 200
     token = login_response.json()["access_token"]
@@ -138,7 +138,9 @@ def test_user_cannot_load_another_users_dataset_to_bigquery(client):
     other_headers = _auth_headers(client, "other@example.com")
     dataset = _create_dataset(client, owner_headers)
 
-    response = client.post(f"/datasets/{dataset['id']}/load-bigquery", headers=other_headers)
+    response = client.post(
+        f"/datasets/{dataset['id']}/load-bigquery", headers=other_headers
+    )
 
     assert response.status_code == 404
 
@@ -188,7 +190,9 @@ def test_successful_bigquery_load_updates_dataset(monkeypatch, client):
             "column_count": 2,
         }
 
-    monkeypatch.setattr("app.routers.datasets.load_csv_to_bigquery", fake_load_csv_to_bigquery)
+    monkeypatch.setattr(
+        "app.routers.datasets.load_csv_to_bigquery", fake_load_csv_to_bigquery
+    )
 
     response = client.post(f"/datasets/{dataset['id']}/load-bigquery", headers=headers)
 
@@ -208,7 +212,10 @@ def test_successful_bigquery_load_updates_dataset(monkeypatch, client):
     assert read_response.status_code == 200
     stored_dataset = read_response.json()
     assert stored_dataset["status"] == "loaded"
-    assert stored_dataset["bigquery_table_id"] == "test-project.queryshield_demo.dataset_1_sales_data_2026"
+    assert (
+        stored_dataset["bigquery_table_id"]
+        == "test-project.queryshield_demo.dataset_1_sales_data_2026"
+    )
     assert stored_dataset["load_error"] is None
     assert stored_dataset["loaded_at"] is not None
 
@@ -221,18 +228,26 @@ def test_failed_bigquery_load_sets_failed_status(monkeypatch, client):
     def fake_load_csv_to_bigquery(dataset, dataset_columns):
         raise RuntimeError("BigQuery credentials are invalid")
 
-    monkeypatch.setattr("app.routers.datasets.load_csv_to_bigquery", fake_load_csv_to_bigquery)
+    monkeypatch.setattr(
+        "app.routers.datasets.load_csv_to_bigquery", fake_load_csv_to_bigquery
+    )
 
     response = client.post(f"/datasets/{dataset['id']}/load-bigquery", headers=headers)
 
-    assert response.status_code == 500
-    assert "Failed to load dataset into BigQuery" in response.json()["detail"]
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "Failed to load dataset into BigQuery: Google Cloud credentials are not configured for BigQuery loading. "
+        "Configure Application Default Credentials locally or use the Cloud Run runtime service account in GCP."
+    )
 
     read_response = client.get(f"/datasets/{dataset['id']}", headers=headers)
     assert read_response.status_code == 200
     stored_dataset = read_response.json()
     assert stored_dataset["status"] == "failed"
-    assert stored_dataset["load_error"] == "BigQuery credentials are invalid"
+    assert (
+        stored_dataset["load_error"]
+        == "Google Cloud credentials are not configured for BigQuery loading. Configure Application Default Credentials locally or use the Cloud Run runtime service account in GCP."
+    )
 
 
 def test_bigquery_info_endpoint_requires_ownership(client):
@@ -240,7 +255,9 @@ def test_bigquery_info_endpoint_requires_ownership(client):
     other_headers = _auth_headers(client, "infoother@example.com")
     dataset = _create_dataset(client, owner_headers)
 
-    response = client.get(f"/datasets/{dataset['id']}/bigquery-info", headers=other_headers)
+    response = client.get(
+        f"/datasets/{dataset['id']}/bigquery-info", headers=other_headers
+    )
 
     assert response.status_code == 404
 
@@ -262,7 +279,9 @@ def test_bigquery_info_endpoint_returns_table_metadata(monkeypatch, client):
     db = database.SessionLocal()
     try:
         db_dataset = db.get(Dataset, dataset["id"])
-        db_dataset.bigquery_table_id = "test-project.queryshield_demo.dataset_1_sales_data"
+        db_dataset.bigquery_table_id = (
+            "test-project.queryshield_demo.dataset_1_sales_data"
+        )
         db_dataset.status = "loaded"
         db.add(
             DatasetColumn(
@@ -286,7 +305,9 @@ def test_bigquery_info_endpoint_returns_table_metadata(monkeypatch, client):
             "schema": [{"name": "order_id", "type": "INT64", "mode": "NULLABLE"}],
         }
 
-    monkeypatch.setattr("app.routers.datasets.fetch_bigquery_table_info", fake_fetch_bigquery_table_info)
+    monkeypatch.setattr(
+        "app.routers.datasets.fetch_bigquery_table_info", fake_fetch_bigquery_table_info
+    )
 
     response = client.get(f"/datasets/{dataset['id']}/bigquery-info", headers=headers)
 
@@ -298,3 +319,65 @@ def test_bigquery_info_endpoint_returns_table_metadata(monkeypatch, client):
         "num_bytes": 2048,
         "schema": [{"name": "order_id", "type": "INT64", "mode": "NULLABLE"}],
     }
+
+
+def test_upload_csv_rejects_payload_that_exceeds_configured_limit(client):
+    original_limit = settings.MAX_UPLOAD_SIZE_MB
+    settings.MAX_UPLOAD_SIZE_MB = 1
+    try:
+        headers = _auth_headers(client, "large-upload@example.com")
+        dataset = _create_dataset(client, headers, "Large Upload Dataset")
+        oversized_csv = b"id,name\n" + (b"1,Alice\n" * 140000)
+
+        response = client.post(
+            f"/datasets/{dataset['id']}/upload-csv",
+            headers=headers,
+            files={"file": ("large.csv", oversized_csv, "text/csv")},
+        )
+    finally:
+        settings.MAX_UPLOAD_SIZE_MB = original_limit
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "File is too large"
+
+
+def test_dataset_list_rejects_out_of_bounds_pagination(client):
+    headers = _auth_headers(client, "dataset-pagination@example.com")
+
+    too_large = client.get("/datasets?limit=101", headers=headers)
+    negative_skip = client.get("/datasets?skip=-1", headers=headers)
+    zero_limit = client.get("/datasets?limit=0", headers=headers)
+
+    assert too_large.status_code == 422
+    assert negative_skip.status_code == 422
+    assert zero_limit.status_code == 422
+
+
+def test_bigquery_load_credential_error_is_sanitized(monkeypatch, client):
+    headers = _auth_headers(client, "credentialload@example.com")
+    dataset = _create_dataset(client, headers)
+    _upload_csv(client, headers, dataset["id"])
+
+    def fake_load_csv_to_bigquery(dataset, dataset_columns):
+        raise RuntimeError(
+            "Your default credentials were not found. To set up Application Default Credentials, see https://cloud.google.com/docs/authentication/external/set-up-adc for more information."
+        )
+
+    monkeypatch.setattr(
+        "app.routers.datasets.load_csv_to_bigquery", fake_load_csv_to_bigquery
+    )
+
+    response = client.post(f"/datasets/{dataset['id']}/load-bigquery", headers=headers)
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "Failed to load dataset into BigQuery: Google Cloud credentials are not configured for BigQuery loading. "
+        "Configure Application Default Credentials locally or use the Cloud Run runtime service account in GCP."
+    )
+
+    read_response = client.get(f"/datasets/{dataset['id']}", headers=headers)
+    assert read_response.status_code == 200
+    assert read_response.json()["load_error"] == (
+        "Google Cloud credentials are not configured for BigQuery loading. "
+        "Configure Application Default Credentials locally or use the Cloud Run runtime service account in GCP."
+    )

@@ -74,6 +74,7 @@ services:
       UPLOAD_DIR: /app/storage/uploads
       MAX_UPLOAD_SIZE_MB: 20
       CSV_PREVIEW_ROWS: 10
+      MAX_CSV_COLUMNS: 200
     volumes:
       - upload_data:/app/storage/uploads
     ports:

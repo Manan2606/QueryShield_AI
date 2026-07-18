@@ -40,6 +40,7 @@ class QueryExecutionResponse(BaseModel):
     ai_summary_error: str | None
     ai_summary_generated_at: datetime | None
 
+
 class QueryExecutionSummary(BaseModel):
     execution_status: str
     result_row_count: int | None

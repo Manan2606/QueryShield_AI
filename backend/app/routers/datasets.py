@@ -1,5 +1,5 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -8,13 +8,29 @@ from app.db.database import get_db
 from app.models.dataset_column import DatasetColumn
 from app.models.user import User
 from app.schemas.bigquery import BigQueryLoadResponse, BigQueryTableInfoResponse
-from app.schemas.dataset import DatasetCreate, DatasetDetailResponse, DatasetResponse, DatasetUpdate
+from app.schemas.dataset import (
+    DatasetCreate,
+    DatasetDetailResponse,
+    DatasetResponse,
+    DatasetUpdate,
+)
 from app.schemas.upload import CSVPreviewResponse, CSVUploadResponse
 from app.services.audit_service import create_audit_log
-from app.services.bigquery_service import get_bigquery_table_info as fetch_bigquery_table_info
+from app.services.bigquery_service import (
+    get_bigquery_table_info as fetch_bigquery_table_info,
+)
 from app.services.bigquery_service import load_csv_to_bigquery
-from app.services.csv_service import analyze_csv, preview_csv, save_upload_file, validate_csv_file
-from app.services.storage_service import UploadStorageError, get_upload_storage
+from app.services.csv_service import (
+    analyze_csv,
+    preview_csv,
+    save_upload_file,
+    validate_csv_file,
+)
+from app.services.storage_service import (
+    UploadStorageError,
+    UploadTooLargeError,
+    get_upload_storage,
+)
 from app.services.dataset_service import (
     DatasetDeletionBlocked,
     create_dataset,
@@ -26,6 +42,28 @@ from app.services.dataset_service import (
 
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
+
+
+def _safe_bigquery_load_error(exc: Exception) -> str:
+    class_name = exc.__class__.__name__
+    text = str(exc).lower()
+    if (
+        class_name in {"DefaultCredentialsError", "RefreshError"}
+        or "credential" in text
+        or "default credentials" in text
+    ):
+        return "Google Cloud credentials are not configured for BigQuery loading. Configure Application Default Credentials locally or use the Cloud Run runtime service account in GCP."
+    if class_name in {"Forbidden", "PermissionDenied"} or "permission" in text:
+        return "The configured Google Cloud identity does not have permission to load data into BigQuery."
+    if "not found" in text:
+        return "The configured BigQuery dataset, table, or uploaded CSV file could not be found."
+    if "api" in text and "disabled" in text:
+        return "The BigQuery API may be disabled for the configured project."
+    if "location" in text:
+        return "BigQuery could not load the dataset because of a location mismatch."
+    if "quota" in text:
+        return "BigQuery could not load the dataset because a quota limit was reached."
+    return "BigQuery loading failed because of a Google Cloud configuration or service error."
 
 
 def _add_audit_log(
@@ -45,15 +83,22 @@ def create_dataset_endpoint(
     current_user: User = Depends(get_current_user),
 ) -> DatasetResponse:
     dataset = create_dataset(db, current_user.id, dataset_in)
-    create_audit_log(db, current_user.id, "dataset.created", "dataset", str(dataset.id), {"dataset_id": dataset.id, "name": dataset.name})
+    create_audit_log(
+        db,
+        current_user.id,
+        "dataset.created",
+        "dataset",
+        str(dataset.id),
+        {"dataset_id": dataset.id, "name": dataset.name},
+    )
     db.commit()
     return DatasetResponse.model_validate(dataset)
 
 
 @router.get("", response_model=list[DatasetResponse])
 def list_datasets(
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[DatasetResponse]:
@@ -69,7 +114,9 @@ def read_dataset(
 ) -> DatasetDetailResponse:
     dataset = get_user_dataset_by_id(db, current_user.id, dataset_id)
     if dataset is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found"
+        )
     return DatasetDetailResponse.model_validate(dataset)
 
 
@@ -82,8 +129,17 @@ def update_dataset(
 ) -> DatasetResponse:
     dataset = update_user_dataset(db, current_user.id, dataset_id, dataset_in)
     if dataset is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
-    create_audit_log(db, current_user.id, "dataset.updated", "dataset", str(dataset.id), {"dataset_id": dataset.id})
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found"
+        )
+    create_audit_log(
+        db,
+        current_user.id,
+        "dataset.updated",
+        "dataset",
+        str(dataset.id),
+        {"dataset_id": dataset.id},
+    )
     db.commit()
     return DatasetResponse.model_validate(dataset)
 
@@ -97,10 +153,21 @@ def delete_dataset(
     try:
         dataset = delete_user_dataset(db, current_user.id, dataset_id)
     except DatasetDeletionBlocked as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     if dataset is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
-    create_audit_log(db, current_user.id, "dataset.deleted", "dataset", str(dataset.id), {"dataset_id": dataset.id, "name": dataset.name})
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found"
+        )
+    create_audit_log(
+        db,
+        current_user.id,
+        "dataset.deleted",
+        "dataset",
+        str(dataset.id),
+        {"dataset_id": dataset.id, "name": dataset.name},
+    )
     db.commit()
     return {"message": "Dataset deleted successfully"}
 
@@ -114,30 +181,52 @@ def upload_csv(
 ) -> CSVUploadResponse:
     dataset = get_user_dataset_by_id(db, current_user.id, dataset_id)
     if dataset is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found"
+        )
 
     try:
         validate_csv_file(file)
+    except UploadTooLargeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)
+        ) from exc
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
 
     try:
-        original_filename, storage_path, analysis_path = save_upload_file(file, dataset_id)
+        original_filename, storage_path, analysis_path = save_upload_file(
+            file, dataset_id
+        )
         storage = get_upload_storage()
         try:
             analysis = analyze_csv(analysis_path)
         finally:
             storage.cleanup_local_path(analysis_path)
+    except UploadTooLargeError as exc:
+        dataset.status = "failed"
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=str(exc)
+        ) from exc
     except ValueError as exc:
         dataset.status = "failed"
         db.commit()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
     except UploadStorageError as exc:
         dataset.status = "failed"
         db.commit()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
 
-    db.query(DatasetColumn).filter(DatasetColumn.dataset_id == dataset.id).delete(synchronize_session=False)
+    db.query(DatasetColumn).filter(DatasetColumn.dataset_id == dataset.id).delete(
+        synchronize_session=False
+    )
 
     for column_data in analysis["columns"]:
         column = DatasetColumn(
@@ -155,14 +244,25 @@ def upload_csv(
     dataset.status = "schema_detected"
     dataset.row_count = analysis["row_count"]
     dataset.column_count = analysis["column_count"]
-    create_audit_log(db, current_user.id, "dataset.csv_uploaded", "dataset", str(dataset.id), {"dataset_id": dataset.id, "filename": original_filename})
+    create_audit_log(
+        db,
+        current_user.id,
+        "dataset.csv_uploaded",
+        "dataset",
+        str(dataset.id),
+        {"dataset_id": dataset.id, "filename": original_filename},
+    )
     create_audit_log(
         db,
         current_user.id,
         "dataset.schema_detected",
         "dataset",
         str(dataset.id),
-        {"dataset_id": dataset.id, "row_count": analysis["row_count"], "column_count": analysis["column_count"]},
+        {
+            "dataset_id": dataset.id,
+            "row_count": analysis["row_count"],
+            "column_count": analysis["column_count"],
+        },
     )
     db.commit()
     db.refresh(dataset)
@@ -194,20 +294,29 @@ def preview_dataset_csv(
 ) -> CSVPreviewResponse:
     dataset = get_user_dataset_by_id(db, current_user.id, dataset_id)
     if dataset is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found"
+        )
     if not dataset.storage_path:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No CSV file uploaded for this dataset")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No CSV file uploaded for this dataset",
+        )
 
     storage = get_upload_storage()
     try:
         preview_path = storage.local_path_for_read(dataset.storage_path)
     except UploadStorageError as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
     try:
         preview = preview_csv(preview_path, limit=settings.CSV_PREVIEW_ROWS)
     finally:
         storage.cleanup_local_path(preview_path)
-    return CSVPreviewResponse(dataset_id=dataset.id, columns=preview["columns"], rows=preview["rows"])
+    return CSVPreviewResponse(
+        dataset_id=dataset.id, columns=preview["columns"], rows=preview["rows"]
+    )
 
 
 @router.post("/{dataset_id}/load-bigquery", response_model=BigQueryLoadResponse)
@@ -218,17 +327,27 @@ def load_dataset_to_bigquery(
 ) -> BigQueryLoadResponse:
     dataset = get_user_dataset_by_id(db, current_user.id, dataset_id)
     if dataset is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found"
+        )
 
     if not dataset.storage_path:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No CSV file uploaded for this dataset")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No CSV file uploaded for this dataset",
+        )
     storage = get_upload_storage()
     try:
         storage_exists = storage.exists(dataset.storage_path)
     except UploadStorageError as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
     if not storage_exists:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded CSV file was not found")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded CSV file was not found",
+        )
 
     columns = (
         db.query(DatasetColumn)
@@ -237,7 +356,10 @@ def load_dataset_to_bigquery(
         .all()
     )
     if not columns:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No detected schema found for this dataset")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No detected schema found for this dataset",
+        )
 
     dataset.status = "loading"
     dataset.load_error = None
@@ -248,7 +370,7 @@ def load_dataset_to_bigquery(
     try:
         load_result = load_csv_to_bigquery(dataset, columns)
     except Exception as exc:
-        error_message = str(exc)
+        error_message = _safe_bigquery_load_error(exc)
         dataset.status = "failed"
         dataset.load_error = error_message
         _add_audit_log(
@@ -260,7 +382,7 @@ def load_dataset_to_bigquery(
         )
         db.commit()
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to load dataset into BigQuery: {error_message}",
         ) from exc
 
@@ -273,7 +395,10 @@ def load_dataset_to_bigquery(
         current_user.id,
         "dataset.bigquery_load_succeeded",
         dataset.id,
-        {"bigquery_table_id": dataset.bigquery_table_id, "job_id": load_result.get("job_id")},
+        {
+            "bigquery_table_id": dataset.bigquery_table_id,
+            "job_id": load_result.get("job_id"),
+        },
     )
     db.commit()
     db.refresh(dataset)
@@ -296,9 +421,14 @@ def get_dataset_bigquery_info(
 ) -> BigQueryTableInfoResponse:
     dataset = get_user_dataset_by_id(db, current_user.id, dataset_id)
     if dataset is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Dataset not found"
+        )
     if not dataset.bigquery_table_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dataset has not been loaded into BigQuery")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Dataset has not been loaded into BigQuery",
+        )
 
     try:
         table_info = fetch_bigquery_table_info(dataset.bigquery_table_id)

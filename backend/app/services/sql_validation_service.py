@@ -5,7 +5,7 @@ from datetime import datetime
 from fastapi import status
 from sqlalchemy.orm import Session
 
-from app.models.audit_log import AuditLog
+from app.services.audit_service import create_audit_log
 from app.models.dataset import Dataset
 from app.models.dataset_column import DatasetColumn
 from app.models.query_request import QueryRequest
@@ -13,7 +13,9 @@ from app.models.query_request import QueryRequest
 try:
     import sqlglot
     from sqlglot import exp
-except ImportError as exc:  # pragma: no cover - exercised only when dependencies are missing.
+except (
+    ImportError
+) as exc:  # pragma: no cover - exercised only when dependencies are missing.
     sqlglot = None
     exp = None
     SQLGLOT_IMPORT_ERROR = exc
@@ -47,7 +49,10 @@ FORBIDDEN_PATTERN_MESSAGES: tuple[tuple[str, str], ...] = (
     (r"\bDECLARE\b", "BigQuery scripting variables are not allowed"),
     (r"\bSET\b", "BigQuery scripting variables are not allowed"),
     (r"\bEXTERNAL_QUERY\s*\(", "External query functions are not allowed"),
-    (r"\bML\.PREDICT\s*\(", "BigQuery ML prediction is not supported in validation step 8"),
+    (
+        r"\bML\.PREDICT\s*\(",
+        "BigQuery ML prediction is not supported in validation step 8",
+    ),
 )
 
 
@@ -79,14 +84,13 @@ def _add_audit_log(
     query_request_id: int | None = None,
     details: dict | None = None,
 ) -> None:
-    db.add(
-        AuditLog(
-            user_id=user_id,
-            action=action,
-            resource_type="query_request",
-            resource_id=str(query_request_id) if query_request_id is not None else None,
-            details=details,
-        )
+    create_audit_log(
+        db,
+        user_id,
+        action,
+        "query_request",
+        str(query_request_id) if query_request_id is not None else None,
+        details,
     )
 
 
@@ -114,15 +118,29 @@ def _strip_sql_comments(sql: str) -> str:
             result.append(char)
             index += 1
             continue
-        if not in_single and not in_double and not in_backtick and char == "-" and nxt == "-":
+        if (
+            not in_single
+            and not in_double
+            and not in_backtick
+            and char == "-"
+            and nxt == "-"
+        ):
             index += 2
             while index < len(sql) and sql[index] not in "\r\n":
                 index += 1
             result.append(" ")
             continue
-        if not in_single and not in_double and not in_backtick and char == "/" and nxt == "*":
+        if (
+            not in_single
+            and not in_double
+            and not in_backtick
+            and char == "/"
+            and nxt == "*"
+        ):
             index += 2
-            while index + 1 < len(sql) and not (sql[index] == "*" and sql[index + 1] == "/"):
+            while index + 1 < len(sql) and not (
+                sql[index] == "*" and sql[index + 1] == "/"
+            ):
                 index += 1
             index += 2 if index + 1 < len(sql) else 0
             result.append(" ")
@@ -149,13 +167,13 @@ def _table_parts(table) -> list[str]:
     for part in getattr(table, "parts", []) or []:
         name = getattr(part, "name", None) or str(part)
         if name:
-            parts.append(name.strip("`\""))
+            parts.append(name.strip('`"'))
     if parts:
         return parts
     rendered = table.sql(dialect="bigquery")
     rendered = re.sub(r"\s+AS\s+.+$", "", rendered, flags=re.IGNORECASE)
     rendered = re.sub(r"\s+.+$", "", rendered)
-    return [piece.strip("`\"") for piece in rendered.split(".") if piece]
+    return [piece.strip('`"') for piece in rendered.split(".") if piece]
 
 
 def _table_name(table) -> str:
@@ -194,7 +212,11 @@ def _referenced_physical_tables(expression) -> tuple[list[str], set[str]]:
 def _statement_type(expression) -> str:
     if isinstance(expression, exp.Select):
         return "SELECT"
-    return expression.key.upper() if getattr(expression, "key", None) else expression.__class__.__name__.upper()
+    return (
+        expression.key.upper()
+        if getattr(expression, "key", None)
+        else expression.__class__.__name__.upper()
+    )
 
 
 def _has_aggregation(expression) -> bool:
@@ -219,7 +241,9 @@ def _function_name(function) -> str:
     return sql.upper()
 
 
-def _validate_columns(expression, allowed_columns: list[str] | None, physical_aliases: set[str]) -> list[str]:
+def _validate_columns(
+    expression, allowed_columns: list[str] | None, physical_aliases: set[str]
+) -> list[str]:
     if not allowed_columns:
         return []
     allowed = {_normalize_identifier(column) for column in allowed_columns}
@@ -231,12 +255,15 @@ def _validate_columns(expression, allowed_columns: list[str] | None, physical_al
         if not name or name == "*" or name in allowed:
             continue
         if qualifier and qualifier in physical_aliases:
-            warnings.append(f"Column '{column.sql(dialect='bigquery')}' is not in the stored dataset schema")
+            warnings.append(
+                f"Column '{column.sql(dialect='bigquery')}' is not in the stored dataset schema"
+            )
         elif not qualifier:
             uncertain.add(name)
     if uncertain:
         warnings.append(
-            "Column validation is conservative; review possible aliases or unknown columns: " + ", ".join(sorted(uncertain))
+            "Column validation is conservative; review possible aliases or unknown columns: "
+            + ", ".join(sorted(uncertain))
         )
     return warnings
 
@@ -247,7 +274,9 @@ def validate_generated_sql(
     allowed_columns: list[str] | None = None,
 ) -> ValidationResult:
     if sqlglot is None or exp is None:
-        raise SQLValidatorInternalError("sqlglot is not installed") from SQLGLOT_IMPORT_ERROR
+        raise SQLValidatorInternalError(
+            "sqlglot is not installed"
+        ) from SQLGLOT_IMPORT_ERROR
 
     normalized_sql = sql.strip()
     if not normalized_sql:
@@ -261,7 +290,11 @@ def validate_generated_sql(
     try:
         statements = sqlglot.parse(normalized_sql, read="bigquery")
     except Exception:
-        return ValidationResult(is_safe=False, errors=["SQL could not be parsed"], normalized_sql=normalized_sql)
+        return ValidationResult(
+            is_safe=False,
+            errors=["SQL could not be parsed"],
+            normalized_sql=normalized_sql,
+        )
 
     if len(statements) != 1:
         return ValidationResult(
@@ -293,7 +326,9 @@ def validate_generated_sql(
     if not referenced_tables:
         errors.append("SQL must reference the selected BigQuery table")
 
-    for table, normalized_table in zip(referenced_tables, referenced_normalized, strict=False):
+    for table, normalized_table in zip(
+        referenced_tables, referenced_normalized, strict=False
+    ):
         if "information_schema" in normalized_table:
             errors.append("INFORMATION_SCHEMA access is not allowed")
         if "*" in normalized_table:
@@ -310,15 +345,25 @@ def validate_generated_sql(
     for function in expression.find_all(exp.Func):
         function_name = _function_name(function)
         if function_name in {"EXTERNAL_QUERY", "EXECUTE_IMMEDIATE"}:
-            errors.append(f"Dangerous BigQuery function is not allowed: {function_name}")
+            errors.append(
+                f"Dangerous BigQuery function is not allowed: {function_name}"
+            )
         if function_name == "ML.PREDICT" or function_name.endswith(".ML.PREDICT"):
-            errors.append("BigQuery ML prediction is not supported in validation step 8")
+            errors.append(
+                "BigQuery ML prediction is not supported in validation step 8"
+            )
 
     if any(True for _ in expression.find_all(exp.Star)):
         warnings.append(SELECT_STAR_WARNING)
 
-    has_limit = any(select.args.get("limit") is not None for select in expression.find_all(exp.Select))
-    has_group = any(select.args.get("group") is not None for select in expression.find_all(exp.Select))
+    has_limit = any(
+        select.args.get("limit") is not None
+        for select in expression.find_all(exp.Select)
+    )
+    has_group = any(
+        select.args.get("group") is not None
+        for select in expression.find_all(exp.Select)
+    )
     if not has_limit and not has_group and not _has_aggregation(expression):
         warnings.append(MISSING_LIMIT_WARNING)
 
@@ -332,7 +377,9 @@ def validate_generated_sql(
         referenced_tables=referenced_tables,
         errors=deduped_errors,
         warnings=deduped_warnings,
-        normalized_sql=expression.sql(dialect="bigquery") if not deduped_errors else normalized_sql,
+        normalized_sql=expression.sql(dialect="bigquery")
+        if not deduped_errors
+        else normalized_sql,
     )
 
 
@@ -352,16 +399,34 @@ def _to_validation_response(query_request: QueryRequest) -> dict:
     }
 
 
-def validate_query_request(db: Session, current_user_id: int, query_request_id: int) -> dict:
-    query_request = db.query(QueryRequest).filter(QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id).first()
+def validate_query_request(
+    db: Session, current_user_id: int, query_request_id: int
+) -> dict:
+    query_request = (
+        db.query(QueryRequest)
+        .filter(
+            QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id
+        )
+        .first()
+    )
     if query_request is None:
-        raise SQLValidationRequestError("Query request not found", status.HTTP_404_NOT_FOUND)
+        raise SQLValidationRequestError(
+            "Query request not found", status.HTTP_404_NOT_FOUND
+        )
     if query_request.generation_status != "generated":
-        raise SQLValidationRequestError("Query request must have generated SQL before validation")
+        raise SQLValidationRequestError(
+            "Query request must have generated SQL before validation"
+        )
     if not query_request.generated_sql:
         raise SQLValidationRequestError("Query request does not have generated SQL")
 
-    dataset = db.query(Dataset).filter(Dataset.id == query_request.dataset_id, Dataset.owner_id == current_user_id).first()
+    dataset = (
+        db.query(Dataset)
+        .filter(
+            Dataset.id == query_request.dataset_id, Dataset.owner_id == current_user_id
+        )
+        .first()
+    )
     if dataset is None:
         raise SQLValidationRequestError("Dataset not found", status.HTTP_404_NOT_FOUND)
     if not dataset.bigquery_table_id:
@@ -376,12 +441,20 @@ def validate_query_request(db: Session, current_user_id: int, query_request_id: 
     allowed_columns = [column.name for column in columns]
 
     query_request.validation_status = "validating"
-    _add_audit_log(db, current_user_id, "query.validation_started", query_request.id, {"dataset_id": dataset.id})
+    _add_audit_log(
+        db,
+        current_user_id,
+        "query.validation_started",
+        query_request.id,
+        {"dataset_id": dataset.id},
+    )
     db.commit()
     db.refresh(query_request)
 
     try:
-        result = validate_generated_sql(query_request.generated_sql, dataset.bigquery_table_id, allowed_columns)
+        result = validate_generated_sql(
+            query_request.generated_sql, dataset.bigquery_table_id, allowed_columns
+        )
         query_request.validation_status = "passed" if result.is_safe else "failed"
         query_request.is_safe = result.is_safe
         query_request.statement_type = result.statement_type
@@ -394,7 +467,11 @@ def validate_query_request(db: Session, current_user_id: int, query_request_id: 
             current_user_id,
             "query.validation_passed" if result.is_safe else "query.validation_failed",
             query_request.id,
-            {"dataset_id": dataset.id, "errors": result.errors, "warnings": result.warnings},
+            {
+                "dataset_id": dataset.id,
+                "errors": result.errors,
+                "warnings": result.warnings,
+            },
         )
         db.commit()
         db.refresh(query_request)
@@ -408,7 +485,13 @@ def validate_query_request(db: Session, current_user_id: int, query_request_id: 
         query_request.validation_warnings = []
         query_request.referenced_tables = []
         query_request.validated_at = datetime.utcnow()
-        _add_audit_log(db, current_user_id, "query.validation_error", query_request.id, {"dataset_id": dataset.id})
+        _add_audit_log(
+            db,
+            current_user_id,
+            "query.validation_error",
+            query_request.id,
+            {"dataset_id": dataset.id},
+        )
         db.commit()
         raise
     except Exception as exc:
@@ -429,10 +512,20 @@ def validate_query_request(db: Session, current_user_id: int, query_request_id: 
         raise SQLValidatorInternalError("SQL validator failed unexpectedly") from exc
 
 
-def get_query_validation(db: Session, current_user_id: int, query_request_id: int) -> dict:
-    query_request = db.query(QueryRequest).filter(QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id).first()
+def get_query_validation(
+    db: Session, current_user_id: int, query_request_id: int
+) -> dict:
+    query_request = (
+        db.query(QueryRequest)
+        .filter(
+            QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id
+        )
+        .first()
+    )
     if query_request is None:
-        raise SQLValidationRequestError("Query request not found", status.HTTP_404_NOT_FOUND)
+        raise SQLValidationRequestError(
+            "Query request not found", status.HTTP_404_NOT_FOUND
+        )
     if query_request.validation_status == "not_validated":
         raise SQLValidationRequestError("Query request has not been validated")
     return _to_validation_response(query_request)

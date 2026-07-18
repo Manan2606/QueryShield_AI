@@ -7,7 +7,11 @@ from sqlalchemy.orm import Session
 
 from app.models.audit_log import AuditLog
 from app.models.query_request import QueryRequest
-from app.services.query_history_service import QueryHistoryRequestError, _validate_limit, _validate_sort_order
+from app.services.query_history_service import (
+    QueryHistoryRequestError,
+    _validate_limit,
+    _validate_sort_order,
+)
 
 
 def _audit_response(audit_log: AuditLog) -> dict[str, Any]:
@@ -52,7 +56,9 @@ def list_user_audit_logs(
         query = query.filter(AuditLog.created_at <= created_to)
 
     total = query.count()
-    ordered = query.order_by(asc(AuditLog.created_at) if order == "asc" else desc(AuditLog.created_at))
+    ordered = query.order_by(
+        asc(AuditLog.created_at) if order == "asc" else desc(AuditLog.created_at)
+    )
     records = ordered.offset(skip).limit(effective_limit).all()
     return {
         "items": [_audit_response(record) for record in records],
@@ -63,10 +69,20 @@ def list_user_audit_logs(
     }
 
 
-def list_query_audit_logs(db: Session, current_user_id: int, query_request_id: int) -> dict[str, Any]:
-    query_request = db.query(QueryRequest).filter(QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id).first()
+def list_query_audit_logs(
+    db: Session, current_user_id: int, query_request_id: int
+) -> dict[str, Any]:
+    query_request = (
+        db.query(QueryRequest)
+        .filter(
+            QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id
+        )
+        .first()
+    )
     if query_request is None:
-        raise QueryHistoryRequestError("Query request not found", status.HTTP_404_NOT_FOUND)
+        raise QueryHistoryRequestError(
+            "Query request not found", status.HTTP_404_NOT_FOUND
+        )
 
     records = (
         db.query(AuditLog)

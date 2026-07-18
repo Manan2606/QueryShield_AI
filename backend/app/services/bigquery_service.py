@@ -33,7 +33,9 @@ def get_bigquery_client():
     bigquery = _get_bigquery_module()
     project = settings.GCP_PROJECT_ID or None
     if settings.GOOGLE_APPLICATION_CREDENTIALS:
-        os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", settings.GOOGLE_APPLICATION_CREDENTIALS)
+        os.environ.setdefault(
+            "GOOGLE_APPLICATION_CREDENTIALS", settings.GOOGLE_APPLICATION_CREDENTIALS
+        )
     return bigquery.Client(project=project)
 
 
@@ -94,7 +96,9 @@ def build_bigquery_schema(dataset_columns):
             map_to_bigquery_type(column.data_type),
             mode="NULLABLE" if column.nullable else "REQUIRED",
         )
-        for column in sorted(dataset_columns, key=lambda column: column.ordinal_position)
+        for column in sorted(
+            dataset_columns, key=lambda column: column.ordinal_position
+        )
     ]
 
 
@@ -135,10 +139,14 @@ def load_csv_to_bigquery(dataset, dataset_columns) -> dict[str, Any]:
     )
 
     if is_gcs_uri:
-        load_job = client.load_table_from_uri(dataset.storage_path, table_id, job_config=job_config)
+        load_job = client.load_table_from_uri(
+            dataset.storage_path, table_id, job_config=job_config
+        )
     else:
         with csv_path.open("rb") as csv_file:
-            load_job = client.load_table_from_file(csv_file, table_id, job_config=job_config)
+            load_job = client.load_table_from_file(
+                csv_file, table_id, job_config=job_config
+            )
 
     load_job.result()
     table = client.get_table(table_id)
@@ -187,7 +195,9 @@ def run_query_dry_run(sql: str) -> QueryDryRunResult:
         total_bytes_processed=getattr(query_job, "total_bytes_processed", None),
         job_id=getattr(query_job, "job_id", None),
         location=getattr(query_job, "location", None),
-        estimate_accuracy=getattr(query_job, "estimated_bytes_processed_accuracy", None),
+        estimate_accuracy=getattr(
+            query_job, "estimated_bytes_processed_accuracy", None
+        ),
     )
 
 
@@ -245,14 +255,21 @@ def execute_query(
     query_job = client.query(sql, job_config=job_config)
 
     try:
-        row_iterator = query_job.result(timeout=timeout_seconds, max_results=row_limit + 1)
+        row_iterator = query_job.result(
+            timeout=timeout_seconds, max_results=row_limit + 1
+        )
     except TimeoutError as exc:
         try:
             query_job.cancel()
         finally:
-            raise BigQueryExecutionTimeout("The query timed out before completion.", getattr(query_job, "job_id", None)) from exc
+            raise BigQueryExecutionTimeout(
+                "The query timed out before completion.",
+                getattr(query_job, "job_id", None),
+            ) from exc
 
-    schema = list(getattr(row_iterator, "schema", None) or getattr(query_job, "schema", []) or [])
+    schema = list(
+        getattr(row_iterator, "schema", None) or getattr(query_job, "schema", []) or []
+    )
     columns = [
         QueryResultColumn(
             name=getattr(field, "name", ""),

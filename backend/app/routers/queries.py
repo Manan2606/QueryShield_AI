@@ -50,7 +50,9 @@ def generate_query_sql(
     current_user: User = Depends(get_current_user),
 ) -> QueryGenerateResponse:
     try:
-        result = generate_sql_for_dataset(db, current_user.id, query_in.dataset_id, query_in.question)
+        result = generate_sql_for_dataset(
+            db, current_user.id, query_in.dataset_id, query_in.question
+        )
     except QueryGenerationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     return QueryGenerateResponse(**result)
@@ -108,7 +110,9 @@ def validate_query_sql(
     except SQLValidationRequestError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except SQLValidatorInternalError as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
     return SQLValidationResponse(**result)
 
 

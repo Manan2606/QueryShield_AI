@@ -7,13 +7,16 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.audit_log import AuditLog
+from app.services.audit_service import create_audit_log
 from app.models.dataset import Dataset
 from app.models.dataset_column import DatasetColumn
 from app.models.query_request import QueryRequest
 from app.services.bigquery_service import BigQueryExecutionTimeout, execute_query
 from app.services.result_summary_service import generate_result_summary
-from app.services.sql_validation_service import SQLValidatorInternalError, validate_generated_sql
+from app.services.sql_validation_service import (
+    SQLValidatorInternalError,
+    validate_generated_sql,
+)
 
 
 class QueryExecutionRequestError(RuntimeError):
@@ -34,14 +37,13 @@ def _add_audit_log(
     query_request_id: int | None = None,
     details: dict[str, Any] | None = None,
 ) -> None:
-    db.add(
-        AuditLog(
-            user_id=user_id,
-            action=action,
-            resource_type="query_request",
-            resource_id=str(query_request_id) if query_request_id is not None else None,
-            details=details,
-        )
+    create_audit_log(
+        db,
+        user_id,
+        action,
+        "query_request",
+        str(query_request_id) if query_request_id is not None else None,
+        details,
     )
 
 
@@ -50,7 +52,10 @@ def _safe_error_message(exc: Exception) -> str:
     text = str(exc).lower()
     if "maximum bytes" in text or "maximum_bytes" in text or "billing tier" in text:
         return "The query exceeded the configured maximum bytes billed."
-    if class_name in {"DefaultCredentialsError", "RefreshError"} or "credential" in text:
+    if (
+        class_name in {"DefaultCredentialsError", "RefreshError"}
+        or "credential" in text
+    ):
         return "Google Cloud credentials are not configured correctly."
     if class_name in {"Forbidden", "PermissionDenied"} or "permission" in text:
         return "The configured Google Cloud identity cannot execute BigQuery jobs."
@@ -67,6 +72,7 @@ def _safe_error_message(exc: Exception) -> str:
     if "network" in text or "connection" in text:
         return "BigQuery execution failed because of a network issue."
     return "BigQuery execution failed."
+
 
 def _safe_summary_error(exc: Exception) -> str:
     text = str(exc).lower()
@@ -96,13 +102,21 @@ def _attempt_ai_summary(
         query_request.ai_summary_generated_at = None
         return
 
-    _add_audit_log(db, current_user_id, "query.ai_summary_started", query_request.id, {"dataset_id": dataset.id, "result_row_count": len(rows)})
+    _add_audit_log(
+        db,
+        current_user_id,
+        "query.ai_summary_started",
+        query_request.id,
+        {"dataset_id": dataset.id, "result_row_count": len(rows)},
+    )
     try:
         summary = generate_result_summary(
             question=query_request.natural_language_question,
             generated_sql=query_request.generated_sql or "",
             rows=rows,
-            columns=[str(column.get("name")) for column in columns if column.get("name")],
+            columns=[
+                str(column.get("name")) for column in columns if column.get("name")
+            ],
             row_count=len(rows),
         )
     except Exception as exc:
@@ -110,26 +124,69 @@ def _attempt_ai_summary(
         query_request.ai_summary_status = "failed"
         query_request.ai_summary_error = _safe_summary_error(exc)
         query_request.ai_summary_generated_at = None
-        _add_audit_log(db, current_user_id, "query.ai_summary_failed", query_request.id, {"dataset_id": dataset.id, "error": query_request.ai_summary_error})
+        _add_audit_log(
+            db,
+            current_user_id,
+            "query.ai_summary_failed",
+            query_request.id,
+            {"dataset_id": dataset.id, "error": query_request.ai_summary_error},
+        )
         return
 
     query_request.ai_summary = summary
     query_request.ai_summary_status = "completed"
     query_request.ai_summary_error = None
     query_request.ai_summary_generated_at = datetime.utcnow()
-    _add_audit_log(db, current_user_id, "query.ai_summary_completed", query_request.id, {"dataset_id": dataset.id, "result_row_count": len(rows), "empty_result": len(rows) == 0})
+    _add_audit_log(
+        db,
+        current_user_id,
+        "query.ai_summary_completed",
+        query_request.id,
+        {
+            "dataset_id": dataset.id,
+            "result_row_count": len(rows),
+            "empty_result": len(rows) == 0,
+        },
+    )
 
-def _load_owned_query(db: Session, current_user_id: int, query_request_id: int) -> QueryRequest:
-    query_request = db.query(QueryRequest).filter(QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id).first()
+
+def _load_owned_query(
+    db: Session, current_user_id: int, query_request_id: int
+) -> QueryRequest:
+    query_request = (
+        db.query(QueryRequest)
+        .filter(
+            QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id
+        )
+        .first()
+    )
     if query_request is None:
-        raise QueryExecutionRequestError("Query request not found", status.HTTP_404_NOT_FOUND)
+        raise QueryExecutionRequestError(
+            "Query request not found", status.HTTP_404_NOT_FOUND
+        )
     return query_request
 
 
-def _load_owned_dataset(db: Session, current_user_id: int, query_request: QueryRequest) -> Dataset:
-    dataset = db.query(Dataset).filter(Dataset.id == query_request.dataset_id, Dataset.owner_id == current_user_id).first()
+def _load_owned_dataset(
+    db: Session, current_user_id: int, query_request: QueryRequest
+) -> Dataset:
+    dataset = (
+        db.query(Dataset)
+        .filter(
+            Dataset.id == query_request.dataset_id, Dataset.owner_id == current_user_id
+        )
+        .first()
+    )
     if dataset is None:
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Dataset not found", status_code=status.HTTP_404_NOT_FOUND, set_ineligible=True)
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Dataset not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            set_ineligible=True,
+        )
     return dataset
 
 
@@ -155,47 +212,148 @@ def _block_query(
         current_user_id,
         audit_action,
         query_request.id,
-        {"dataset_id": query_request.dataset_id, "execution_status": "blocked", "error": detail},
+        {
+            "dataset_id": query_request.dataset_id,
+            "execution_status": "blocked",
+            "error": detail,
+        },
     )
     db.commit()
     raise QueryExecutionRequestError(detail, status_code)
 
 
-def _require_pre_execution_gates(db: Session, current_user_id: int, query_request: QueryRequest) -> None:
+def _require_pre_execution_gates(
+    db: Session, current_user_id: int, query_request: QueryRequest
+) -> None:
     if query_request.generation_status != "generated":
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Query generation must succeed before execution")
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Query generation must succeed before execution",
+        )
     if not query_request.generated_sql:
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Query request does not have generated SQL")
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Query request does not have generated SQL",
+        )
     if query_request.validation_status != "passed":
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Query must pass SQL safety validation before execution")
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Query must pass SQL safety validation before execution",
+        )
     if query_request.is_safe is not True:
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Query must be marked safe before execution")
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Query must be marked safe before execution",
+        )
     if query_request.dry_run_status != "passed":
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Query must pass BigQuery dry run before execution")
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Query must pass BigQuery dry run before execution",
+        )
     if query_request.dry_run_valid is not True:
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "BigQuery dry run must be valid before execution")
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "BigQuery dry run must be valid before execution",
+        )
     if query_request.bytes_limit_exceeded is not False:
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Query estimated bytes exceed the configured maximum bytes billed", set_ineligible=True)
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Query estimated bytes exceed the configured maximum bytes billed",
+            set_ineligible=True,
+        )
     if query_request.execution_eligible is not True:
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Query is not eligible for execution")
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Query is not eligible for execution",
+        )
     if query_request.estimated_bytes_processed is None:
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Query dry run must include an estimated bytes value", set_ineligible=True)
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Query dry run must include an estimated bytes value",
+            set_ineligible=True,
+        )
     if query_request.estimated_bytes_processed > settings.MAX_BYTES_BILLED:
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Query estimated bytes exceed the configured maximum bytes billed", set_ineligible=True)
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Query estimated bytes exceed the configured maximum bytes billed",
+            set_ineligible=True,
+        )
 
 
-def _require_dataset_context(db: Session, current_user_id: int, query_request: QueryRequest, dataset: Dataset) -> None:
+def _require_dataset_context(
+    db: Session, current_user_id: int, query_request: QueryRequest, dataset: Dataset
+) -> None:
     if dataset.status != "loaded":
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Dataset must be loaded into BigQuery before execution", set_ineligible=True)
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Dataset must be loaded into BigQuery before execution",
+            set_ineligible=True,
+        )
     if not dataset.bigquery_table_id:
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Dataset does not have a BigQuery table ID", set_ineligible=True)
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Dataset does not have a BigQuery table ID",
+            set_ineligible=True,
+        )
     if not query_request.generated_for_table_id:
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Query table context is missing; regenerate and revalidate the query", set_ineligible=True)
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Query table context is missing; regenerate and revalidate the query",
+            set_ineligible=True,
+        )
     if query_request.generated_for_table_id != dataset.bigquery_table_id:
-        _block_query(db, current_user_id, query_request, "query.execution_blocked", "Dataset BigQuery table changed after generation; regenerate, revalidate, and dry run the query", set_ineligible=True)
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_blocked",
+            "Dataset BigQuery table changed after generation; regenerate, revalidate, and dry run the query",
+            set_ineligible=True,
+        )
 
 
-def _revalidate_for_execution(db: Session, current_user_id: int, query_request: QueryRequest, dataset: Dataset) -> None:
+def _revalidate_for_execution(
+    db: Session, current_user_id: int, query_request: QueryRequest, dataset: Dataset
+) -> None:
     columns = (
         db.query(DatasetColumn)
         .filter(DatasetColumn.dataset_id == dataset.id)
@@ -204,9 +362,21 @@ def _revalidate_for_execution(db: Session, current_user_id: int, query_request: 
     )
     allowed_columns = [column.name for column in columns]
     try:
-        result = validate_generated_sql(query_request.generated_sql or "", dataset.bigquery_table_id or "", allowed_columns)
-    except SQLValidatorInternalError as exc:
-        raise QueryExecutionInternalError("SQL validator failed during execution revalidation") from exc
+        result = validate_generated_sql(
+            query_request.generated_sql or "",
+            dataset.bigquery_table_id or "",
+            allowed_columns,
+        )
+    except SQLValidatorInternalError:
+        _block_query(
+            db,
+            current_user_id,
+            query_request,
+            "query.execution_revalidation_error",
+            "Stored SQL could not be revalidated before execution",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            set_ineligible=True,
+        )
     if not result.is_safe:
         _block_query(
             db,
@@ -222,7 +392,9 @@ def _effective_row_limit(requested_row_limit: int | None) -> int:
     if requested_row_limit is None:
         return settings.QUERY_RESULT_ROW_LIMIT
     if requested_row_limit > settings.QUERY_RESULT_ROW_LIMIT:
-        raise QueryExecutionRequestError("Requested row limit exceeds the configured server maximum")
+        raise QueryExecutionRequestError(
+            "Requested row limit exceeds the configured server maximum"
+        )
     return requested_row_limit
 
 
@@ -253,7 +425,9 @@ def _safe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{str(key): _json_safe(value) for key, value in row.items()} for row in rows]
 
 
-def _to_response(query_request: QueryRequest, row_limit: int | None = None) -> dict[str, Any]:
+def _to_response(
+    query_request: QueryRequest, row_limit: int | None = None
+) -> dict[str, Any]:
     return {
         "query_request_id": query_request.id,
         "dataset_id": query_request.dataset_id,
@@ -311,7 +485,13 @@ def execute_query_request(
     query_request.ai_summary_status = "not_available"
     query_request.ai_summary_error = None
     query_request.ai_summary_generated_at = None
-    _add_audit_log(db, current_user_id, "query.execution_started", query_request.id, {"dataset_id": dataset.id, "row_limit": row_limit})
+    _add_audit_log(
+        db,
+        current_user_id,
+        "query.execution_started",
+        query_request.id,
+        {"dataset_id": dataset.id, "row_limit": row_limit},
+    )
     db.commit()
     db.refresh(query_request)
 
@@ -323,7 +503,10 @@ def execute_query_request(
             timeout_seconds=settings.QUERY_TIMEOUT_SECONDS,
         )
         safe_rows = _safe_rows(result.rows)
-        columns = [{"name": column.name, "field_type": column.field_type, "mode": column.mode} for column in result.columns]
+        columns = [
+            {"name": column.name, "field_type": column.field_type, "mode": column.mode}
+            for column in result.columns
+        ]
         completed_at = datetime.utcnow()
         query_request.execution_status = "succeeded"
         query_request.execution_job_id = result.job_id
@@ -353,7 +536,9 @@ def execute_query_request(
                 "execution_status": "succeeded",
             },
         )
-        _attempt_ai_summary(db, current_user_id, query_request, dataset, safe_rows, columns)
+        _attempt_ai_summary(
+            db, current_user_id, query_request, dataset, safe_rows, columns
+        )
 
     except BigQueryExecutionTimeout as exc:
         completed_at = datetime.utcnow()
@@ -361,7 +546,13 @@ def execute_query_request(
         query_request.execution_job_id = exc.job_id
         query_request.execution_completed_at = completed_at
         query_request.execution_error = "The query timed out before completion."
-        _add_audit_log(db, current_user_id, "query.execution_timed_out", query_request.id, {"dataset_id": dataset.id, "execution_job_id": exc.job_id})
+        _add_audit_log(
+            db,
+            current_user_id,
+            "query.execution_timed_out",
+            query_request.id,
+            {"dataset_id": dataset.id, "execution_job_id": exc.job_id},
+        )
     except Exception as exc:
         completed_at = datetime.utcnow()
         class_name = exc.__class__.__name__
@@ -374,14 +565,20 @@ def execute_query_request(
             current_user_id,
             "query.execution_error" if is_internal else "query.execution_failed",
             query_request.id,
-            {"dataset_id": dataset.id, "execution_status": query_request.execution_status, "error": query_request.execution_error},
+            {
+                "dataset_id": dataset.id,
+                "execution_status": query_request.execution_status,
+                "error": query_request.execution_error,
+            },
         )
     db.commit()
     db.refresh(query_request)
     return _to_response(query_request, row_limit)
 
 
-def get_query_execution(db: Session, current_user_id: int, query_request_id: int) -> dict[str, Any]:
+def get_query_execution(
+    db: Session, current_user_id: int, query_request_id: int
+) -> dict[str, Any]:
     query_request = _load_owned_query(db, current_user_id, query_request_id)
     if query_request.execution_status == "not_executed":
         raise QueryExecutionRequestError("Query has not been executed")

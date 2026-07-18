@@ -15,7 +15,15 @@ QUERY_STATUS_FILTERS = {
     "generation_status": {"pending", "generated", "failed"},
     "validation_status": {"not_validated", "validating", "passed", "failed", "error"},
     "dry_run_status": {"not_run", "running", "passed", "blocked", "failed", "error"},
-    "execution_status": {"not_executed", "running", "succeeded", "failed", "blocked", "timed_out", "error"},
+    "execution_status": {
+        "not_executed",
+        "running",
+        "succeeded",
+        "failed",
+        "blocked",
+        "timed_out",
+        "error",
+    },
 }
 MAX_HISTORY_LIMIT = 100
 MAX_AUDIT_LIMIT = 100
@@ -117,7 +125,11 @@ def list_query_history(
         if value is not None and value not in QUERY_STATUS_FILTERS[field]:
             raise QueryHistoryRequestError(f"Invalid {field} filter")
 
-    query = db.query(QueryRequest).outerjoin(Dataset, QueryRequest.dataset_id == Dataset.id).filter(QueryRequest.user_id == current_user_id)
+    query = (
+        db.query(QueryRequest)
+        .outerjoin(Dataset, QueryRequest.dataset_id == Dataset.id)
+        .filter(QueryRequest.user_id == current_user_id)
+    )
     if dataset_id is not None:
         query = query.filter(QueryRequest.dataset_id == dataset_id)
     if generation_status is not None:
@@ -138,10 +150,19 @@ def list_query_history(
         query = query.filter(QueryRequest.created_at <= created_to)
     if search:
         pattern = f"%{search.strip()}%"
-        query = query.filter(or_(QueryRequest.natural_language_question.ilike(pattern), QueryRequest.generated_sql.ilike(pattern)))
+        query = query.filter(
+            or_(
+                QueryRequest.natural_language_question.ilike(pattern),
+                QueryRequest.generated_sql.ilike(pattern),
+            )
+        )
 
     total = query.count()
-    ordered = query.order_by(asc(QueryRequest.created_at) if order == "asc" else desc(QueryRequest.created_at))
+    ordered = query.order_by(
+        asc(QueryRequest.created_at)
+        if order == "asc"
+        else desc(QueryRequest.created_at)
+    )
     records = ordered.offset(skip).limit(effective_limit).all()
     return {
         "items": [_history_item(record) for record in records],
@@ -152,10 +173,20 @@ def list_query_history(
     }
 
 
-def get_query_lifecycle(db: Session, current_user_id: int, query_request_id: int) -> dict[str, Any]:
-    query_request = db.query(QueryRequest).filter(QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id).first()
+def get_query_lifecycle(
+    db: Session, current_user_id: int, query_request_id: int
+) -> dict[str, Any]:
+    query_request = (
+        db.query(QueryRequest)
+        .filter(
+            QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id
+        )
+        .first()
+    )
     if query_request is None:
-        raise QueryHistoryRequestError("Query request not found", status.HTTP_404_NOT_FOUND)
+        raise QueryHistoryRequestError(
+            "Query request not found", status.HTTP_404_NOT_FOUND
+        )
 
     audit_query = db.query(AuditLog).filter(
         AuditLog.user_id == current_user_id,
@@ -174,7 +205,9 @@ def get_query_lifecycle(db: Session, current_user_id: int, query_request_id: int
             "user_id": query_request.user_id,
             "dataset_id": query_request.dataset_id,
             "dataset_name": _dataset_name(dataset),
-            "bigquery_table_id": dataset.bigquery_table_id if dataset is not None else query_request.generated_for_table_id,
+            "bigquery_table_id": dataset.bigquery_table_id
+            if dataset is not None
+            else query_request.generated_for_table_id,
             "question": query_request.natural_language_question,
             "created_at": query_request.created_at,
             "updated_at": query_request.updated_at,
@@ -199,9 +232,15 @@ def get_query_lifecycle(db: Session, current_user_id: int, query_request_id: int
             "status": query_request.dry_run_status,
             "dry_run_valid": query_request.dry_run_valid,
             "estimated_bytes_processed": query_request.estimated_bytes_processed,
-            "estimated_mib_processed": bytes_to_mib(query_request.estimated_bytes_processed),
-            "estimated_gib_processed": bytes_to_gib(query_request.estimated_bytes_processed),
-            "estimated_tib_processed": bytes_to_tib(query_request.estimated_bytes_processed),
+            "estimated_mib_processed": bytes_to_mib(
+                query_request.estimated_bytes_processed
+            ),
+            "estimated_gib_processed": bytes_to_gib(
+                query_request.estimated_bytes_processed
+            ),
+            "estimated_tib_processed": bytes_to_tib(
+                query_request.estimated_bytes_processed
+            ),
             "maximum_bytes_billed": maximum_bytes_billed,
             "estimated_cost": _format_decimal(query_request.estimated_cost),
             "estimated_cost_currency": query_request.estimated_cost_currency,

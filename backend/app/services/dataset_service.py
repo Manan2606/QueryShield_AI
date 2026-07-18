@@ -10,7 +10,9 @@ class DatasetDeletionBlocked(RuntimeError):
 
 
 def create_dataset(db: Session, owner_id: int, dataset_in: DatasetCreate) -> Dataset:
-    dataset = Dataset(owner_id=owner_id, name=dataset_in.name, description=dataset_in.description)
+    dataset = Dataset(
+        owner_id=owner_id, name=dataset_in.name, description=dataset_in.description
+    )
     db.add(dataset)
     db.commit()
     db.refresh(dataset)
@@ -21,15 +23,31 @@ def get_dataset_by_id(db: Session, dataset_id: int) -> Dataset | None:
     return db.query(Dataset).filter(Dataset.id == dataset_id).first()
 
 
-def get_user_dataset_by_id(db: Session, owner_id: int, dataset_id: int) -> Dataset | None:
-    return db.query(Dataset).filter(Dataset.owner_id == owner_id, Dataset.id == dataset_id).first()
+def get_user_dataset_by_id(
+    db: Session, owner_id: int, dataset_id: int
+) -> Dataset | None:
+    return (
+        db.query(Dataset)
+        .filter(Dataset.owner_id == owner_id, Dataset.id == dataset_id)
+        .first()
+    )
 
 
-def list_user_datasets(db: Session, owner_id: int, skip: int = 0, limit: int = 100) -> list[Dataset]:
-    return db.query(Dataset).filter(Dataset.owner_id == owner_id).offset(skip).limit(limit).all()
+def list_user_datasets(
+    db: Session, owner_id: int, skip: int = 0, limit: int = 100
+) -> list[Dataset]:
+    return (
+        db.query(Dataset)
+        .filter(Dataset.owner_id == owner_id)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
 
-def update_user_dataset(db: Session, owner_id: int, dataset_id: int, dataset_in: DatasetUpdate) -> Dataset | None:
+def update_user_dataset(
+    db: Session, owner_id: int, dataset_id: int, dataset_in: DatasetUpdate
+) -> Dataset | None:
     dataset = get_user_dataset_by_id(db, owner_id, dataset_id)
     if dataset is None:
         return None
@@ -51,9 +69,14 @@ def delete_user_dataset(db: Session, owner_id: int, dataset_id: int) -> Dataset 
     if dataset is None:
         return None
 
-    has_query_history = db.query(QueryRequest.id).filter(QueryRequest.dataset_id == dataset.id).first() is not None
+    has_query_history = (
+        db.query(QueryRequest.id).filter(QueryRequest.dataset_id == dataset.id).first()
+        is not None
+    )
     if has_query_history:
-        raise DatasetDeletionBlocked("Dataset has query history and cannot be deleted in this MVP")
+        raise DatasetDeletionBlocked(
+            "Dataset has query history and cannot be deleted in this MVP"
+        )
 
     db.delete(dataset)
     db.commit()

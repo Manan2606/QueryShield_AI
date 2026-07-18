@@ -32,7 +32,7 @@ export default function AuthSection({ token, currentUser, loading, onSignup, onL
   }
 
   return (
-    <SectionCard title="Authentication" description="Signup returns a user record; login returns a bearer token stored only in localStorage for this local console.">
+    <SectionCard title="Authentication" description="Signup returns a user record; login returns a bearer token stored in sessionStorage for this session.">
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="inline-flex rounded-md border border-slate-200 bg-slate-50 p-1">
           <button className={`tab-button ${mode === "login" ? "tab-button-active" : ""}`} onClick={() => setMode("login")} type="button">Login</button>

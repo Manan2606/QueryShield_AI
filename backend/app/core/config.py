@@ -4,13 +4,23 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+PLACEHOLDER_SECRET_VALUES = {
+    "",
+    "change_me",
+    "change_me_for_local_only",
+    "local-dev-change-me",
+    "ci-only-secret",
+    "test-secret",
+}
+
+
 class Settings(BaseSettings):
     APP_ENV: str = "local"
     database_url: str = "sqlite:///./queryshield.db"
     JWT_SECRET_KEY: str = "change_me"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
-    FRONTEND_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+    FRONTEND_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://localhost:3002,http://127.0.0.1:3002,http://localhost:3100,http://127.0.0.1:3100"
     GCP_PROJECT_ID: str = ""
     GCP_REGION: str = "us-central1"
     BIGQUERY_DATASET_ID: str = "queryshield_demo"
@@ -27,7 +37,8 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./storage/uploads"
     MAX_UPLOAD_SIZE_MB: int = 20
     CSV_PREVIEW_ROWS: int = 10
-    AI_SUMMARY_ENABLED: bool = True
+    MAX_CSV_COLUMNS: int = 200
+    AI_SUMMARY_ENABLED: bool = False
     SUMMARY_MAX_ROWS: int = 25
     SUMMARY_MAX_CHARS: int = 6000
 
@@ -49,12 +60,42 @@ class Settings(BaseSettings):
     def use_gcs_uploads(self) -> bool:
         return self.STORAGE_BACKEND.lower() == "gcs"
 
-    @field_validator("MAX_BYTES_BILLED", "QUERY_RESULT_ROW_LIMIT", "QUERY_TIMEOUT_SECONDS", "SUMMARY_MAX_ROWS", "SUMMARY_MAX_CHARS")
+    @field_validator(
+        "MAX_BYTES_BILLED",
+        "QUERY_RESULT_ROW_LIMIT",
+        "QUERY_TIMEOUT_SECONDS",
+        "SUMMARY_MAX_ROWS",
+        "SUMMARY_MAX_CHARS",
+        "MAX_CSV_COLUMNS",
+    )
     @classmethod
     def positive_int(cls, value: int) -> int:
         if value <= 0:
             raise ValueError("Configured query limits must be greater than 0")
         return value
+
+
+def validate_production_settings() -> None:
+    if settings.APP_ENV.lower() != "production":
+        return
+
+    if (
+        settings.JWT_SECRET_KEY.strip() in PLACEHOLDER_SECRET_VALUES
+        or len(settings.JWT_SECRET_KEY) < 32
+    ):
+        raise RuntimeError(
+            "JWT_SECRET_KEY must be set to a strong non-placeholder value in production"
+        )
+
+    if settings.AI_SUMMARY_ENABLED and not settings.GEMINI_API_KEY.strip():
+        raise RuntimeError(
+            "GEMINI_API_KEY must be configured when AI_SUMMARY_ENABLED=true in production"
+        )
+
+    if settings.use_gcs_uploads and not settings.GCS_UPLOAD_BUCKET.strip():
+        raise RuntimeError(
+            "GCS_UPLOAD_BUCKET must be configured when STORAGE_BACKEND=gcs in production"
+        )
 
 
 settings = Settings()

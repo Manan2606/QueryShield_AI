@@ -56,12 +56,13 @@ Only expose `NEXT_PUBLIC_API_BASE_URL` to the browser. Do not place backend secr
 
 ```powershell
 npm run dev
+npm run typecheck
 npm run test:charts
 npm run build
 npm run start
 ```
 
-This project currently does not define an `npm run lint` script.
+CI runs `npm run typecheck`, `npm run test:charts`, and `npm run build`.
 
 ## Routes
 
@@ -99,9 +100,9 @@ This URL is browser-facing. Do not set it to `http://backend:8000` unless the ar
 
 ## Authentication Behavior
 
-The MVP stores the backend access token in `localStorage` under `queryshield_access_token`. Protected routes call `/users/me`; missing or invalid tokens are cleared and redirected to `/login`.
+The MVP stores the backend access token in browser `sessionStorage` under `queryshield_access_token`. Protected routes call `/users/me`; missing or invalid tokens are cleared and redirected to `/login`. Existing legacy `localStorage` tokens are migrated into the session and removed.
 
-This is acceptable for the local MVP but should be hardened before production, likely with secure HTTP-only cookies or a stronger session strategy.
+This is safer than persistent local storage for the MVP, but a production deployment should still move to secure HTTP-only cookies or a stronger server-managed session strategy.
 
 ## GCP Deployment Notes
 

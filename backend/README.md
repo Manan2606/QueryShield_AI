@@ -81,7 +81,7 @@ For production-like local development, use PostgreSQL:
 DATABASE_URL=postgresql+psycopg2://user:password@localhost:5432/queryshield_ai
 ```
 
-Local database files are ignored by Git. MVP-1 Cloud Run deployment uses `sqlite:////tmp/queryshield.db` for metadata only; that data is ephemeral.
+Local database files are ignored by Git. MVP-1 Cloud Run deployment uses `sqlite:////tmp/queryshield.db` for metadata only; that data is ephemeral. In `APP_ENV=production`, the backend runs Alembic migrations during application startup.
 
 ## Cloud Storage, BigQuery, and Gemini
 
@@ -133,7 +133,8 @@ The test suite uses FastAPI `TestClient`, HTTPX, local database setup, and mocke
 ## Endpoint Groups
 
 - `GET /` and `GET /health`: service health.
-- `GET /health/db`: database health.
+- `GET /health/db`: database connectivity, required schema-table readiness, and migration revision readiness.
+- `GET /ready`: deployment readiness across production config, database schema, and migration revision.
 - `POST /auth/signup` and `POST /auth/login`: authentication.
 - `GET /users/me`: current authenticated user.
 - `/datasets`: dataset CRUD.
@@ -176,6 +177,7 @@ Backend variables are defined in `app/core/config.py` and documented in `.env.ex
 - `UPLOAD_DIR`
 - `MAX_UPLOAD_SIZE_MB`
 - `CSV_PREVIEW_ROWS`
+- `MAX_CSV_COLUMNS`
 - `AI_SUMMARY_ENABLED`
 - `SUMMARY_MAX_ROWS`
 - `SUMMARY_MAX_CHARS`
@@ -221,6 +223,6 @@ GCS_UPLOAD_BUCKET=your-upload-bucket
 FRONTEND_ORIGINS=https://your-frontend-service-url
 ```
 
-Cloud Run should provide `JWT_SECRET_KEY` and `GEMINI_API_KEY` from Secret Manager. `DATABASE_URL` is a non-secret MVP-1 value set to `sqlite:////tmp/queryshield.db`. Prefer the Cloud Run runtime service account for BigQuery and Cloud Storage access instead of `GOOGLE_APPLICATION_CREDENTIALS` in production.
+Cloud Run should provide a strong `JWT_SECRET_KEY` and `GEMINI_API_KEY` from Secret Manager. `DATABASE_URL` is a non-secret MVP-1 value set to `sqlite:////tmp/queryshield.db`. Production startup fails if `JWT_SECRET_KEY` is missing, weak, or still a placeholder. The backend starts with Alembic `upgrade head` in production mode, and `/health/db` plus `/ready` fail if required tables are missing or the migration revision is not current. Before a public or repeatable demo with external users, replace SQLite demo metadata with a durable store such as Cloud SQL. Prefer the Cloud Run runtime service account for BigQuery and Cloud Storage access instead of `GOOGLE_APPLICATION_CREDENTIALS` in production.
 
 See `../docs/gcp-mvp1-deployment.md` for the deployment checklist and `../docs/gcp-architecture.md` for diagrams.

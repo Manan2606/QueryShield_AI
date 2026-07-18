@@ -6,7 +6,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.audit_log import AuditLog
+from app.services.audit_service import create_audit_log
 from app.models.dataset import Dataset
 from app.models.query_request import QueryRequest
 from app.services.bigquery_service import run_query_dry_run
@@ -44,7 +44,9 @@ def calculate_estimated_cost(bytes_value: int | None) -> Decimal | None:
     if bytes_value is None:
         return None
     estimated_tib = Decimal(bytes_value) / Decimal(BYTES_PER_TIB)
-    return (estimated_tib * settings.BIGQUERY_ON_DEMAND_PRICE_PER_TIB).quantize(COST_QUANT, rounding=ROUND_HALF_UP)
+    return (estimated_tib * settings.BIGQUERY_ON_DEMAND_PRICE_PER_TIB).quantize(
+        COST_QUANT, rounding=ROUND_HALF_UP
+    )
 
 
 def _add_audit_log(
@@ -54,14 +56,13 @@ def _add_audit_log(
     query_request_id: int | None = None,
     details: dict[str, Any] | None = None,
 ) -> None:
-    db.add(
-        AuditLog(
-            user_id=user_id,
-            action=action,
-            resource_type="query_request",
-            resource_id=str(query_request_id) if query_request_id is not None else None,
-            details=details,
-        )
+    create_audit_log(
+        db,
+        user_id,
+        action,
+        "query_request",
+        str(query_request_id) if query_request_id is not None else None,
+        details,
     )
 
 
@@ -74,7 +75,10 @@ def _safe_error_message(exc: Exception, *, rejected: bool = False) -> str:
         if "not found" in text:
             return "The BigQuery table could not be found."
         return "BigQuery rejected the query during dry run."
-    if class_name in {"DefaultCredentialsError", "RefreshError"} or "credential" in text:
+    if (
+        class_name in {"DefaultCredentialsError", "RefreshError"}
+        or "credential" in text
+    ):
         return "Google Cloud credentials are not configured correctly."
     if class_name in {"Forbidden", "PermissionDenied"} or "permission" in text:
         return "The configured identity does not have permission to run BigQuery jobs."
@@ -105,7 +109,9 @@ def _execution_eligible(query_request: QueryRequest, maximum_bytes_billed: int) 
 
 
 def _to_response(query_request: QueryRequest) -> dict[str, Any]:
-    maximum_bytes_billed = query_request.maximum_bytes_billed or settings.MAX_BYTES_BILLED
+    maximum_bytes_billed = (
+        query_request.maximum_bytes_billed or settings.MAX_BYTES_BILLED
+    )
     estimated_cost = query_request.estimated_cost
     return {
         "query_request_id": query_request.id,
@@ -113,14 +119,23 @@ def _to_response(query_request: QueryRequest) -> dict[str, Any]:
         "dry_run_status": query_request.dry_run_status,
         "dry_run_valid": bool(query_request.dry_run_valid),
         "estimated_bytes_processed": query_request.estimated_bytes_processed,
-        "estimated_mib_processed": bytes_to_mib(query_request.estimated_bytes_processed),
-        "estimated_gib_processed": bytes_to_gib(query_request.estimated_bytes_processed),
-        "estimated_tib_processed": bytes_to_tib(query_request.estimated_bytes_processed),
+        "estimated_mib_processed": bytes_to_mib(
+            query_request.estimated_bytes_processed
+        ),
+        "estimated_gib_processed": bytes_to_gib(
+            query_request.estimated_bytes_processed
+        ),
+        "estimated_tib_processed": bytes_to_tib(
+            query_request.estimated_bytes_processed
+        ),
         "maximum_bytes_billed": maximum_bytes_billed,
         "maximum_mib_billed": bytes_to_mib(maximum_bytes_billed) or 0,
         "bytes_limit_exceeded": bool(query_request.bytes_limit_exceeded),
-        "estimated_cost": f"{estimated_cost:.6f}" if estimated_cost is not None else None,
-        "estimated_cost_currency": query_request.estimated_cost_currency or settings.BIGQUERY_CURRENCY,
+        "estimated_cost": f"{estimated_cost:.6f}"
+        if estimated_cost is not None
+        else None,
+        "estimated_cost_currency": query_request.estimated_cost_currency
+        or settings.BIGQUERY_CURRENCY,
         "execution_eligible": bool(query_request.execution_eligible),
         "dry_run_error": query_request.dry_run_error,
         "dry_run_at": query_request.dry_run_at,
@@ -129,36 +144,63 @@ def _to_response(query_request: QueryRequest) -> dict[str, Any]:
         "generated_sql": query_request.generated_sql or "",
         "warnings": [
             "Estimated cost is informational and may differ from actual billing because of pricing model, free usage, caching, discounts, reservations, and billing configuration."
-        ] if estimated_cost is not None else [],
+        ]
+        if estimated_cost is not None
+        else [],
     }
 
 
-def _load_owned_query(db: Session, current_user_id: int, query_request_id: int) -> QueryRequest:
-    query_request = db.query(QueryRequest).filter(QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id).first()
+def _load_owned_query(
+    db: Session, current_user_id: int, query_request_id: int
+) -> QueryRequest:
+    query_request = (
+        db.query(QueryRequest)
+        .filter(
+            QueryRequest.id == query_request_id, QueryRequest.user_id == current_user_id
+        )
+        .first()
+    )
     if query_request is None:
-        raise QueryDryRunRequestError("Query request not found", status.HTTP_404_NOT_FOUND)
+        raise QueryDryRunRequestError(
+            "Query request not found", status.HTTP_404_NOT_FOUND
+        )
     return query_request
 
 
-def _validate_dry_run_preconditions(db: Session, current_user_id: int, query_request: QueryRequest) -> Dataset:
+def _validate_dry_run_preconditions(
+    db: Session, current_user_id: int, query_request: QueryRequest
+) -> Dataset:
     if query_request.generation_status != "generated":
         raise QueryDryRunRequestError("Query generation must succeed before dry run")
     if not query_request.generated_sql:
         raise QueryDryRunRequestError("Query request does not have generated SQL")
     if query_request.validation_status != "passed" or query_request.is_safe is not True:
-        raise QueryDryRunRequestError("Query must pass SQL safety validation before dry run", status.HTTP_409_CONFLICT)
+        raise QueryDryRunRequestError(
+            "Query must pass SQL safety validation before dry run",
+            status.HTTP_409_CONFLICT,
+        )
 
-    dataset = db.query(Dataset).filter(Dataset.id == query_request.dataset_id, Dataset.owner_id == current_user_id).first()
+    dataset = (
+        db.query(Dataset)
+        .filter(
+            Dataset.id == query_request.dataset_id, Dataset.owner_id == current_user_id
+        )
+        .first()
+    )
     if dataset is None:
         raise QueryDryRunRequestError("Dataset not found", status.HTTP_404_NOT_FOUND)
     if dataset.status != "loaded":
-        raise QueryDryRunRequestError("Dataset must be loaded into BigQuery before dry run")
+        raise QueryDryRunRequestError(
+            "Dataset must be loaded into BigQuery before dry run"
+        )
     if not dataset.bigquery_table_id:
         raise QueryDryRunRequestError("Dataset does not have a BigQuery table ID")
     return dataset
 
 
-def dry_run_query_request(db: Session, current_user_id: int, query_request_id: int) -> dict[str, Any]:
+def dry_run_query_request(
+    db: Session, current_user_id: int, query_request_id: int
+) -> dict[str, Any]:
     query_request = _load_owned_query(db, current_user_id, query_request_id)
     dataset = _validate_dry_run_preconditions(db, current_user_id, query_request)
     maximum_bytes_billed = settings.MAX_BYTES_BILLED
@@ -174,7 +216,13 @@ def dry_run_query_request(db: Session, current_user_id: int, query_request_id: i
     query_request.dry_run_error = None
     query_request.dry_run_job_id = None
     query_request.dry_run_location = None
-    _add_audit_log(db, current_user_id, "query.dry_run_started", query_request.id, {"dataset_id": dataset.id})
+    _add_audit_log(
+        db,
+        current_user_id,
+        "query.dry_run_started",
+        query_request.id,
+        {"dataset_id": dataset.id},
+    )
     db.commit()
     db.refresh(query_request)
 
@@ -193,7 +241,9 @@ def dry_run_query_request(db: Session, current_user_id: int, query_request_id: i
         query_request.dry_run_at = datetime.utcnow()
         query_request.dry_run_job_id = result.job_id
         query_request.dry_run_location = result.location
-        query_request.execution_eligible = _execution_eligible(query_request, maximum_bytes_billed)
+        query_request.execution_eligible = _execution_eligible(
+            query_request, maximum_bytes_billed
+        )
         _add_audit_log(
             db,
             current_user_id,
@@ -236,7 +286,9 @@ def dry_run_query_request(db: Session, current_user_id: int, query_request_id: i
         return _to_response(query_request)
 
 
-def get_query_dry_run(db: Session, current_user_id: int, query_request_id: int) -> dict[str, Any]:
+def get_query_dry_run(
+    db: Session, current_user_id: int, query_request_id: int
+) -> dict[str, Any]:
     query_request = _load_owned_query(db, current_user_id, query_request_id)
     if query_request.dry_run_status == "not_run":
         raise QueryDryRunRequestError("Query dry run has not been run")

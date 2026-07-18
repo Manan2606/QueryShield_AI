@@ -35,6 +35,11 @@ jobs:
       - name: Install backend dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
+      - name: Run backend lint
+        run: python -m ruff check app
+
+      - name: Check backend formatting
+        run: python -m ruff format --check app
       - name: Validate migrations with SQLite
         env:
           APP_ENV: ci
@@ -77,14 +82,8 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Run frontend lint if configured
-        shell: bash
-        run: |
-          if npm run | grep -q "  lint"; then
-            npm run lint
-          else
-            echo "No frontend lint script configured; skipping."
-          fi
+      - name: Run frontend type check
+        run: npm run typecheck
 
       - name: Run chart inference tests
         run: npm run test:charts

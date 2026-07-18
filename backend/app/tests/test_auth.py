@@ -47,7 +47,7 @@ def client():
 def test_signup_login_and_me(client):
     signup_payload = {
         "email": "user@example.com",
-        "password": "password123",
+        "password": "Password123!",
         "full_name": "Test User",
     }
 
@@ -62,7 +62,10 @@ def test_signup_login_and_me(client):
 
     login_response = client.post(
         "/auth/login",
-        data={"username": signup_payload["email"], "password": signup_payload["password"]},
+        data={
+            "username": signup_payload["email"],
+            "password": signup_payload["password"],
+        },
     )
     assert login_response.status_code == 200
     token_data = login_response.json()
@@ -78,3 +81,37 @@ def test_signup_login_and_me(client):
 
     missing_token_response = client.get("/users/me")
     assert missing_token_response.status_code == 401
+
+
+def test_signup_rejects_weak_password(client):
+    response = client.post(
+        "/auth/signup",
+        json={
+            "email": "weak@example.com",
+            "password": "password123!",
+            "full_name": "Weak User",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "Password must include" in response.text
+
+
+def test_login_rate_limit_blocks_repeated_failures(client):
+    signup_payload = {
+        "email": "ratelimit@example.com",
+        "password": "Password123!",
+        "full_name": "Rate Limit User",
+    }
+    assert client.post("/auth/signup", json=signup_payload).status_code == 201
+
+    last_response = None
+    for _ in range(11):
+        last_response = client.post(
+            "/auth/login",
+            data={"username": signup_payload["email"], "password": "WrongPassword123!"},
+        )
+
+    assert last_response is not None
+    assert last_response.status_code == 429
+    assert "Too many authentication attempts" in last_response.json()["detail"]

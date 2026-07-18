@@ -46,7 +46,20 @@ function backendMessage(status: number, data: unknown): string {
     if (typeof detail === "string") {
       return detail;
     }
-    return JSON.stringify(detail);
+    if (Array.isArray(detail)) {
+      const messages = detail
+        .map((item) => {
+          if (item && typeof item === "object" && "msg" in item) {
+            return String((item as { msg: unknown }).msg);
+          }
+          return null;
+        })
+        .filter(Boolean);
+      if (messages.length) {
+        return messages.join(" ");
+      }
+    }
+    return "Please review the form fields and try again.";
   }
 
   return `Request failed with status ${status}`;

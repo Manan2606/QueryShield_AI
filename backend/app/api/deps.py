@@ -24,7 +24,9 @@ def get_current_user(
     )
 
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(
+            token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
+        )
         token_data = TokenPayload(**payload)
     except (JWTError, TypeError, ValueError) as exc:
         raise credentials_exception from exc

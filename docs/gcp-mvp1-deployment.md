@@ -21,29 +21,15 @@ The backend Cloud Run service uses:
 DATABASE_URL=sqlite:////tmp/queryshield.db
 ```
 
-This is acceptable only for the MVP-1 demo. Cloud Run filesystem storage is ephemeral, so signup users, query history, audit logs, and SQLite metadata can reset after restart or replacement. The backend deploy sets `--min-instances 0` to reduce cost and `--max-instances 1` to avoid multiple isolated SQLite databases.
+This is acceptable only for the MVP-1 demo. Cloud Run filesystem storage is ephemeral, so signup users, query history, audit logs, and SQLite metadata can reset after restart or replacement. The backend runs Alembic migrations on production startup so a fresh `/tmp/queryshield.db` has the required schema and current migration revision before user workflows run. The backend deploy sets `--min-instances 0` to reduce cost and `--max-instances 1` to avoid multiple isolated SQLite databases.
 
 Cloud SQL is intentionally excluded for MVP-1. Do not create Cloud SQL instances, connectors, private IP settings, or Cloud SQL deploy flags for this demo workflow.
 
-## Known Resource Values
+## Repository Resource Values
 
-The workflow uses repository variables when present and these fallback values otherwise:
+The deployment workflow now requires repository variables for project-specific identifiers and identity values. It keeps generic defaults only for service names, region, sizing, and non-secret tuning values.
 
-```text
-GCP_PROJECT_ID=queryshield-501723
-GCP_REGION=us-central1
-ARTIFACT_REGISTRY_REPO=queryshield
-GCS_UPLOAD_BUCKET=queryshield_ai
-BACKEND_SERVICE=queryshield-backend
-FRONTEND_SERVICE=queryshield-frontend
-BACKEND_SERVICE_ACCOUNT=queryshield-backend-sa@queryshield-501723.iam.gserviceaccount.com
-GCP_DEPLOY_SERVICE_ACCOUNT=queryshield-github-deploy-sa@queryshield-501723.iam.gserviceaccount.com
-GCP_WORKLOAD_IDENTITY_PROVIDER=projects/752311509951/locations/global/workloadIdentityPools/github-actions-pool/providers/github
-JWT_SECRET_NAME=queryshield_jwt_secret
-GEMINI_API_KEY_SECRET_NAME=queryshield_gemini_api_key
-```
-
-Set `BIGQUERY_DATASET_ID` to the existing dataset name. The app default is `queryshield_demo`, but the existing GCP dataset should be reused rather than duplicated.
+Set `BIGQUERY_DATASET_ID` to the existing dataset name. The app default is `queryshield_demo`, but the deployed workflow requires an explicit repository variable so accidental project drift fails before deploy.
 
 ## Required GitHub Variables
 
@@ -89,7 +75,7 @@ Secret values are not committed, printed, or baked into Docker images. The workf
 The GitHub workflow authenticates as:
 
 ```text
-queryshield-github-deploy-sa@queryshield-501723.iam.gserviceaccount.com
+<deploy-service-account>@<project-id>.iam.gserviceaccount.com
 ```
 
 It needs scoped permissions to write Artifact Registry images, deploy Cloud Run services, and act as the backend runtime service account.
@@ -97,10 +83,10 @@ It needs scoped permissions to write Artifact Registry images, deploy Cloud Run 
 The backend runs as:
 
 ```text
-queryshield-backend-sa@queryshield-501723.iam.gserviceaccount.com
+<backend-service-account>@<project-id>.iam.gserviceaccount.com
 ```
 
-That runtime service account needs access to the existing BigQuery dataset, BigQuery job creation, the `queryshield_ai` bucket, Secret Manager secret access for the two mapped secrets, and Cloud Logging.
+That runtime service account needs access to the existing BigQuery dataset, BigQuery job creation, the configured upload bucket, Secret Manager secret access for the two mapped secrets, and Cloud Logging.
 
 Minimum practical IAM for the backend runtime service account:
 
@@ -132,13 +118,13 @@ It runs on manual dispatch and pushes to `dev`. It performs this order:
 8. Deploy the frontend to Cloud Run with min instances 0 and max instances 1.
 9. Capture the frontend URL.
 10. Update backend `FRONTEND_ORIGINS` to the exact frontend URL.
-11. Verify `GET /health` on the backend and `GET /` on the frontend.
+11. Smoke-test backend signup/login, then verify `GET /health`, `GET /health/db`, and `GET /ready` on the backend and `GET /` on the frontend.
 
 Image names use Artifact Registry paths like:
 
 ```text
-us-central1-docker.pkg.dev/queryshield-501723/queryshield/queryshield-backend:<github-sha>
-us-central1-docker.pkg.dev/queryshield-501723/queryshield/queryshield-frontend:<github-sha>
+<region>-docker.pkg.dev/<project-id>/<artifact-registry-repo>/queryshield-backend:<github-sha>
+<region>-docker.pkg.dev/<project-id>/<artifact-registry-repo>/queryshield-frontend:<github-sha>
 ```
 
 The workflow also pushes `latest` tags for convenience.
@@ -150,11 +136,11 @@ Backend Cloud Run environment:
 ```env
 APP_ENV=production
 DATABASE_URL=sqlite:////tmp/queryshield.db
-GCP_PROJECT_ID=queryshield-501723
+GCP_PROJECT_ID=<project-id>
 GCP_REGION=us-central1
 BIGQUERY_DATASET_ID=<existing_dataset_name>
 STORAGE_BACKEND=gcs
-GCS_UPLOAD_BUCKET=queryshield_ai
+GCS_UPLOAD_BUCKET=<upload-bucket>
 FRONTEND_ORIGINS=<frontend_cloud_run_url_after_deploy>
 GEMINI_MODEL=gemini-2.5-flash
 MAX_BYTES_BILLED=100000000
@@ -177,6 +163,8 @@ After deployment, verify:
 
 ```powershell
 curl https://BACKEND_URL/health
+curl https://BACKEND_URL/health/db
+curl https://BACKEND_URL/ready
 curl https://FRONTEND_URL/
 ```
 
@@ -208,7 +196,7 @@ The MVP-1 workflow uses these controls:
 Cloud Run min instances = 0
 Cloud Run max instances = 1
 BigQuery MAX_BYTES_BILLED = 100000000
-No Cloud SQL
+
 No GKE
 No load balancer
 ```
@@ -222,7 +210,7 @@ Demo cleanup commands should be reviewed before use:
 ```powershell
 gcloud run services delete queryshield-backend --region us-central1
 gcloud run services delete queryshield-frontend --region us-central1
-gcloud artifacts docker images list us-central1-docker.pkg.dev/queryshield-501723/queryshield
+gcloud artifacts docker images list <region>-docker.pkg.dev/<project-id>/<artifact-registry-repo>
 ```
 
 Do not delete the existing BigQuery dataset or upload bucket unless that is explicitly intended.

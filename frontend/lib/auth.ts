@@ -1,19 +1,42 @@
 const TOKEN_STORAGE_KEY = "queryshield_access_token";
 
-export function getStoredToken(): string | null {
+function legacyLocalStorage(): Storage | null {
   if (typeof window === "undefined") {
     return null;
   }
+  return window.localStorage;
+}
 
-  return window.localStorage.getItem(TOKEN_STORAGE_KEY);
+function sessionTokenStorage(): Storage | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  return window.sessionStorage;
+}
+
+export function getStoredToken(): string | null {
+  const sessionStorage = sessionTokenStorage();
+  const token = sessionStorage?.getItem(TOKEN_STORAGE_KEY) ?? null;
+  if (token) {
+    return token;
+  }
+
+  const legacyToken = legacyLocalStorage()?.getItem(TOKEN_STORAGE_KEY) ?? null;
+  if (legacyToken) {
+    sessionStorage?.setItem(TOKEN_STORAGE_KEY, legacyToken);
+    legacyLocalStorage()?.removeItem(TOKEN_STORAGE_KEY);
+  }
+  return legacyToken;
 }
 
 export function storeToken(token: string): void {
-  window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  sessionTokenStorage()?.setItem(TOKEN_STORAGE_KEY, token);
+  legacyLocalStorage()?.removeItem(TOKEN_STORAGE_KEY);
 }
 
 export function clearStoredToken(): void {
-  window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+  sessionTokenStorage()?.removeItem(TOKEN_STORAGE_KEY);
+  legacyLocalStorage()?.removeItem(TOKEN_STORAGE_KEY);
 }
 
 export { TOKEN_STORAGE_KEY };
